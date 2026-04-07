@@ -1,0 +1,20 @@
+[book]
+authors = ["Zhang Alex"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Building an AI Agent OS: Architecture and Implementation of octos"
+description = "A DDIA-style deep dive into the octos AI Agent operating system"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+additional-js = ["mermaid.min.js", "mermaid-init.js", "language-switcher.js"]
+additional-css = ["language-switcher.css"]
+git-repository-url = "https://github.com/ZhangHanDong/octos-book"
+
+[output.html.search]
+enable = true
