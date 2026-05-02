@@ -19,7 +19,7 @@
 - [Chapter 6: Tool System: Design Patterns of Built-in Tools](./part2/ch06.md)
 - [Chapter 7: Defense in Depth: From Sandbox to Prompt Injection Defense](./part2/ch07.md)
 - [Chapter 8: Context Management: Working Efficiently Within Limited Windows](./part2/ch08.md)
-- [Chapter 9: Extension Mechanisms: The Skills and Plugins Dual Track](./part2/ch09.md)
+- [Chapter 9: Extension Mechanisms: Skills, Plugins, and MCP](./part2/ch09.md)
 
 ---
 
@@ -28,7 +28,7 @@
 - [Chapter 10: octos-bus: Unified Message Abstraction for 14 Channels](./part3/ch10.md)
 - [Chapter 11: Concurrency Model: Tokio Async Architecture in Practice](./part3/ch11.md)
 - [Chapter 12: octos-pipeline: DOT Graph-Driven Workflow Engine](./part3/ch12.md)
-- [Chapter 13: Three Runtime Modes and the Configuration System](./part3/ch13.md)
+- [Chapter 13: Four Runtime Modes and the Configuration System](./part3/ch13.md)
 - [Chapter 14: Production: Authentication, Monitoring, and Deployment](./part3/ch14.md)
 
 ---

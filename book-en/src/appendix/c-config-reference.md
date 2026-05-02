@@ -1,71 +1,92 @@
-# 附录 C：配置参考
+# Appendix C: Configuration Reference
 
-## 配置文件位置
+## Configuration File Locations
 
-| 优先级 | 路径 | 说明 |
-|--------|------|------|
-| 1（最高） | `.octos/config.json` | 项目本地配置 |
-| 2 | `~/.config/octos/config.json` | 用户全局配置 |
-| 3（最低） | 内置默认值 | 代码中定义的默认值 |
+| Priority | Path | Description |
+|----------|------|-------------|
+| 1 (highest) | `.octos/config.json` | Project-local configuration |
+| 2 | `~/.config/octos/config.json` | User-global configuration |
+| 3 (lowest) | Built-in defaults | Defaults defined in code |
 
-## 核心配置字段
+## Core Configuration Fields
 
-| 字段路径 | 类型 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `provider` | string | (自动检测) | LLM Provider 名称 |
-| `model` | string | — | 模型 ID |
-| `base_url` | string? | Provider 默认 | API 端点覆盖 |
-| `api_key_env` | string? | Provider 默认 | API Key 环境变量名 |
-| `system_prompt` | string? | 内置默认 | 自定义系统提示 |
-| `max_iterations` | u32 | 50 | Agent 最大迭代次数 |
-| `max_tokens` | u32? | 无限制 | Token 预算上限 |
-| `max_timeout_secs` | u64 | 600 | 墙钟超时（秒） |
-| `tool_timeout_secs` | u64 | 600 | 单工具调用超时（秒） |
+| Field Path | Type | Default | Description |
+|------------|------|---------|-------------|
+| `provider` | string | auto-detected | LLM provider name |
+| `model` | string | — | Model ID |
+| `base_url` | string? | provider default | API endpoint override |
+| `api_key_env` | string? | provider default | Environment variable containing the API key |
+| `system_prompt` | string? | built-in default | Custom system prompt |
+| `max_iterations` | u32 | 50 | Maximum Agent iterations |
+| `max_tokens` | u32? | unlimited | Token budget |
+| `max_timeout_secs` | u64 | 600 | Wall-clock timeout in seconds |
+| `tool_timeout_secs` | u64 | 600 | Timeout for a single tool call |
 
-## 工具策略
+## Tool Policy
 
-| 字段路径 | 类型 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `tools.allow` | string[] | [] | 允许的工具列表（空=全部允许） |
-| `tools.deny` | string[] | [] | 禁止的工具列表（deny-wins） |
-| `tools.byProvider.<name>.allow` | string[] | — | Provider 级允许列表 |
-| `tools.byProvider.<name>.deny` | string[] | — | Provider 级禁止列表 |
+| Field Path | Type | Default | Description |
+|------------|------|---------|-------------|
+| `tools.allow` | string[] | [] | Allowed tool list; empty means all tools are allowed unless denied |
+| `tools.deny` | string[] | [] | Denied tool list; deny wins |
+| `tools.byProvider.<name>.allow` | string[] | — | Provider-level allow list |
+| `tools.byProvider.<name>.deny` | string[] | — | Provider-level deny list |
 
-## Gateway 配置
+## Gateway Configuration
 
-| 字段路径 | 类型 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `gateway.channels` | object | {} | 频道配置 |
-| `gateway.max_concurrent_sessions` | u32 | 10 | 最大并发会话数 |
+| Field Path | Type | Default | Description |
+|------------|------|---------|-------------|
+| `gateway.channels` | object | {} | Channel configuration |
+| `gateway.max_concurrent_sessions` | u32 | 10 | Maximum concurrent active sessions |
 
-## Serve 配置
+## Serve Configuration
 
-| 字段路径 | 类型 | 默认值 | 说明 |
-|---------|------|--------|------|
-| `serve.host` | string | "127.0.0.1" | 绑定地址 |
-| `serve.port` | u16 | 3000 | 绑定端口 |
+| Field Path | Type | Default | Description |
+|------------|------|---------|-------------|
+| `serve.host` | string | `"127.0.0.1"` | Bind address |
+| `serve.port` | u16 | 50080 | Bind port |
 
-## MCP 服务器
+## Profile LLM Configuration
 
-| 字段路径 | 类型 | 说明 |
-|---------|------|------|
-| `mcp_servers.<name>.command` | string | Stdio 模式：启动命令 |
-| `mcp_servers.<name>.args` | string[] | 命令参数 |
-| `mcp_servers.<name>.env` | object | 传递给子进程的环境变量 |
-| `mcp_servers.<name>.url` | string | HTTP 模式：服务器 URL |
+Profile files live under `~/.octos/profiles/<id>.json`. On the current main branch, profile LLM settings are not just top-level `provider` / `model` fields; they live under `config.llm`.
+
+| Field Path | Type | Description |
+|------------|------|-------------|
+| `config.llm.primary.family_id` | string | Primary model family ID, such as `anthropic` or `openai` |
+| `config.llm.primary.model_id` | string | Primary model ID |
+| `config.llm.primary.route.base_url` | string? | API endpoint override for this model route |
+| `config.llm.primary.route.api_key_env` | string? | API key environment variable for this model route |
+| `config.llm.primary.route.api_type` | string? | API type hint, such as OpenAI-compatible or Anthropic |
+| `config.llm.primary.model_hints` | object | Model capability, cost, and context-window hints |
+| `config.llm.primary.cost_per_m` | object? | Cost per million tokens |
+| `config.llm.primary.strong` | bool? | Whether the model is marked as a strong model |
+| `config.llm.fallbacks[]` | object[] | Fallback model list; elements have the same shape as `primary` |
+
+## MCP Servers
+
+| Field Path | Type | Description |
+|------------|------|-------------|
+| `mcp_servers.<name>.command` | string | Stdio mode command |
+| `mcp_servers.<name>.args` | string[] | Command arguments |
+| `mcp_servers.<name>.env` | object | Environment variables passed to the child process |
+| `mcp_servers.<name>.url` | string | HTTP mode server URL |
 
 ## Hooks
 
-| 字段路径 | 类型 | 说明 |
-|---------|------|------|
-| `hooks.before_tool_call` | object[] | 工具调用前钩子 |
-| `hooks.after_tool_call` | object[] | 工具调用后钩子 |
-| `hooks.before_llm_call` | object[] | LLM 调用前钩子 |
-| `hooks.after_llm_call` | object[] | LLM 调用后钩子 |
+| Field Path | Type | Description |
+|------------|------|-------------|
+| `hooks[]` | object[] | Hook list |
+| `hooks[].event` | string | Event name, such as `before_tool_call` or `after_tool_call` |
+| `hooks[].command` | string[] | argv-form command; not interpreted by a shell |
+| `hooks[].timeout_ms` | u64 | Timeout in milliseconds |
+| `hooks[].tool_filter` | string[] | Only match these tools; empty array means no tool filter |
 
-每个 hook 对象：`{ "command": ["cmd", "arg1"], "timeout_ms": 5000, "tool_filter": "shell" }`
+Each hook object looks like:
 
-## 示例配置
+```json
+{ "event": "before_tool_call", "command": ["cmd", "arg1"], "timeout_ms": 5000, "tool_filter": ["shell"] }
+```
+
+## Example Configuration
 
 ```json
 {
@@ -90,10 +111,13 @@
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
     }
   },
-  "hooks": {
-    "before_tool_call": [
-      { "command": ["./audit-hook.sh"], "timeout_ms": 3000 }
-    ]
-  }
+  "hooks": [
+    {
+      "event": "before_tool_call",
+      "command": ["./audit-hook.sh"],
+      "timeout_ms": 3000,
+      "tool_filter": ["shell"]
+    }
+  ]
 }
 ```
