@@ -203,6 +203,24 @@ tokio::spawn(async move {
 
 这解释了为什么 AppUI 可以安全地提供 task list / cancel / restart 这类控制能力：它读写的是 supervisor 维护的受控状态机，而不是从日志里猜测后台任务进度。
 
+### 11.5.4 Lifecycle projection：MCP 与 Harness 看到同一套状态
+
+`TaskSupervisor` 的价值还在于它把后台任务状态投射给不同控制面。`octos mcp-serve` 暴露的 `run_octos_session` 并不会把内部工具调用逐条流给外层 MCP caller；它通过 lifecycle observer 标记 `Running`、`Verifying`，最后把 session aggregate outcome 转成 `Ready` 或 `Failed`（`crates/octos-cli/src/commands/mcp_serve.rs:13-35`; `crates/octos-agent/src/mcp_server.rs:1-34`）。
+
+这意味着外层 orchestrator 看到的是“一个 octos session 的终态和 artifact”，而不是内部 loop 的每个 token 或工具事件。相反，operator dashboard 和 `/api/events/harness` 可以通过 harness events / metrics 观察 background spawn、sub-agent dispatch、swarm dispatch 和 cost attribution。并发状态因此有两种投影：
+
+```mermaid
+flowchart LR
+    T[TaskSupervisor lifecycle] --> MCP[MCP run_octos_session outcome]
+    T --> UI[AppUI task/list cancel restart]
+    T --> H[Harness events + metrics]
+    MCP --> O[Outer orchestrator sees aggregate result]
+    UI --> U[Operator controls background tasks]
+    H --> D[Dashboard / live gates observe typed events]
+```
+
+这个边界很重要：MCP Serve 是 coarse-grained session dispatch，不是把 octos 内部工具目录直接暴露出去；Harness events 是 operator 观察面，不是任务结果协议。
+
 ---
 
 ## 11.6 优雅关停
@@ -341,7 +359,8 @@ octos 支持定时触发 Agent 会话，三种调度类型：
 2. **Session Actor**：每个会话都有自己的 ToolRegistry、SessionHandle、workspace 和 mailbox，状态所有权清晰。
 3. **Semaphore 限流**：默认 10 个活跃处理槽位；permit 在真正处理消息时获取，而不是在 actor 创建时占坑。
 4. **工具与后台任务**：`join_all` 负责单轮工具并发，`spawn` / `spawn_only` 负责把长任务从主回路拆出去；`TaskSupervisor` 负责 `spawn_only` 的状态 ledger、取消态和 fan-out 上限。
-5. **优雅关停**：Gateway shutdown flag 和 per-session cancelled flag 分层配合，配上 Release/Acquire 语义，让接入停止、任务取消、actor 回收和服务 stop 有明确边界。
+5. **Lifecycle projection**：MCP Serve、AppUI 和 Harness events 看到的是同一套任务生命周期的不同投影：外层 orchestrator 收 aggregate outcome，operator 控制后台任务，dashboard 观察 typed events。
+6. **优雅关停**：Gateway shutdown flag 和 per-session cancelled flag 分层配合，配上 Release/Acquire 语义，让接入停止、任务取消、actor 回收和服务 stop 有明确边界。
 
 ---
 

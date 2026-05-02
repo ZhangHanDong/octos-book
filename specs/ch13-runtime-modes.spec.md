@@ -10,14 +10,17 @@ estimate: 1d
 
 octos 提供 CLI/Gateway/Serve/MCP Serve 四种运行模式，配合配置优先级、热加载、
 Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理解如何选择
-运行模式以及配置变更如何传播。
+运行模式以及配置变更如何传播。当前主分支中 `octos serve` 已经成为 AppState
+和控制面的汇聚点，`octos mcp-serve` 则把完整 octos session 暴露为一个
+coarse-grained MCP tool，本章需要避免把它们写成“chat 外壳”或“内部工具直出”。
 
 ## 决策
 
 - 源码文件: `crates/octos-cli/src/main.rs`, `config.rs`, `config_watcher.rs`
-- 命令入口: `chat.rs`, `gateway.rs`, `serve.rs`(API routes), `mcp_serve.rs`
-- 图表: 四种模式架构对比图、配置优先级链路、热加载流程
+- 命令入口: `chat.rs`, `gateway.rs`, `serve.rs`(API routes), `mcp_serve.rs`, `../octos/crates/octos-agent/src/mcp_server.rs`
+- 图表: 四种模式架构对比图、配置优先级链路、热加载流程、Serve control-plane composition、MCP serve session-level dispatch
 - 工程决策侧栏: 热加载 vs 全重启的边界划分
+- MCP Serve 边界: 只暴露 `run_octos_session`，不暴露 octos 内部 tool catalog
 
 ## 边界
 
@@ -69,3 +72,20 @@ Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理
   当 阅读工程决策侧栏
   那么 解释了为什么 system prompt 可以热加载，而 provider/model 的文件变更不会被 watcher 自动应用
   并且 说明了这个边界划分的安全和一致性考量
+
+场景: Serve 是控制面汇聚点
+  测试: review_ch13_serve_control_plane
+  当 阅读 Serve 模式小节
+  那么 说明 `octos serve` 同时汇聚 Config/ProfileStore、LlmProvider/RetryProvider、ToolRegistry/ToolPolicy、SessionManager、REST/SSE/UI Protocol 和 SwarmState
+  并且 说明 dashboard auth 可从 profile email config 推导
+  并且 说明 swarm dispatch policy 从 `config.tool_policy` 和注入型环境变量 denylist 构建
+  并且 包含 Serve control-plane composition Mermaid 图
+
+场景: MCP Serve 是 session-level dispatch
+  测试: review_ch13_mcp_serve_session_level
+  当 阅读 MCP Serve 小节
+  那么 说明 MCP server 只暴露 `run_octos_session`
+  并且 说明每次调用运行完整 octos session 并返回 aggregate result
+  并且 说明外层 caller 看不到内部 tool calls、iteration events 或 progress stream
+  并且 说明 stdio 是 parent-trust auth，HTTP transport 需要 `OCTOS_MCP_SERVER_TOKEN`
+  并且 包含 MCP serve session-level dispatch Mermaid 图

@@ -316,7 +316,52 @@ MCP client 发现到的 tool 不会直接无条件塞进 registry。注册前还
 
 ---
 
-## 9.4 本章回顾
+## 9.4 Harness 工程契约：ABI、事件与验证器
+
+Skills、Plugins 和 MCP 解决的是“能力如何进入 octos”。Harness 解决的是另一个问题：这些能力运行之后，如何把结果变成可验证、可观测、可升级的工程契约。
+
+### 9.4.1 ABI versioning：schema_version 不是 manifest version
+
+`abi_schema.rs` 集中维护 runtime payload 的 schema version，包括 `WorkspacePolicy`、`CompactionPolicy`、`HookPayload`、`ProgressEvent`、`TaskResult`、`SessionSummary`、swarm dispatch、cost attribution、routing decision、credential pool config 和 harness error event（`crates/octos-agent/src/abi_schema.rs:1-142`）。这些版本描述的是 octos runtime 能理解的序列化形状，而不是 plugin / skill 自身的发布版本。
+
+关键规则是 fail closed：`check_supported(kind, found, supported)` 遇到未来版本会返回 typed error，而不是静默忽略新字段（`crates/octos-agent/src/abi_schema.rs:144-186`）。这让外部 skill 可以随 runtime 演进，同时避免旧 runtime 错读新 payload。
+
+### 9.4.2 `OCTOS_EVENT_SINK`：结构化 side-channel
+
+外部 app skill 不一定需要链接 octos runtime，但它需要一种方式报告 progress、error、validator、cost 或 swarm 事件。Harness 通过环境变量提供这条 side-channel：`OCTOS_EVENT_SINK` 指向本地 JSONL sink，`OCTOS_SESSION_ID` / `OCTOS_TASK_ID` 和 `OCTOS_HARNESS_SESSION_ID` / `OCTOS_HARNESS_TASK_ID` 提供关联上下文（`crates/octos-agent/src/harness_events.rs:1-38`）。
+
+这不是普通日志文件。stdout 仍是工具结果协议；event sink 是受 `HarnessEvent` schema 校验的结构化事件 ABI，单行事件有大小上限，写入前会 validate，再 append 到 JSONL（`crates/octos-agent/src/harness_events.rs:116-132`）。
+
+```mermaid
+sequenceDiagram
+    participant Skill as app skill process
+    participant Sink as OCTOS_EVENT_SINK jsonl
+    participant Runtime as octos-agent runtime
+    participant API as /api/events/harness
+    Skill->>Sink: HarnessEvent(progress/error/validator)
+    Runtime->>Sink: tail + validate + fold into task snapshot
+    Runtime->>API: broadcast typed frame
+```
+
+### 9.4.3 Validator runner：不是 shell hook
+
+validator runner 是 workspace contract 的安全执行器。命令 validator 会复用 `SafePolicy`，清理 `BLOCKED_ENV_VARS`，超时后终止子进程，并把 evidence 写到 `<workspace_root>/.octos/validator-evidence/`（`crates/octos-agent/src/validators.rs:1-24`）。outcome 以带 `schema_version` 的 JSONL ledger 持久化，required validator 失败会阻止 terminal success，optional validator 失败只产生 warning。
+
+这和普通 hook 的区别在于：hook 主要改变执行前后的控制流；validator 负责给 artifact 和 workspace contract 提供可回放证据。它是 Ch8 的 contract-gated compaction 和 Ch12 的 workflow artifact gate 的共同基础。
+
+### 9.4.4 Starter app skills：reference implementation
+
+`harness-starter-*` 不是玩具 demo，而是 manifest、concurrency、artifact、validator 和 lifecycle smoke test 的 reference implementation。`harness-starter-audio` 的 smoke test 不只检查 manifest 能解析，还检查 `synthesize_clip` 必须声明 `concurrency_class = "exclusive"`，因为它写 `audio/<slug>.wav`；同一个测试还验证 `primary_audio` artifact 和 `file_size_min:$primary_audio:4096` validator（`crates/app-skills/harness-starter-audio/tests/harness_smoke.rs:23-79`）。
+
+`harness-starter-report` 则展示了更小的 report contract：`reports/*.md`、completion `file_exists`、verify `file_size_min`、failure notification（`crates/app-skills/harness-starter-report/workspace-policy.toml:1-29`）。读者写新 app skill 时，应把这些 starter 当成工程清单，而不是只复制业务代码。
+
+| 文件 | 作用 | 需要检查什么 |
+|------|------|--------------|
+| `manifest.json` | 工具声明 | name、input schema、risk、concurrency class |
+| `workspace-policy.toml` | artifact contract | primary artifact、completion validator、failure action |
+| `tests/harness_smoke.rs` | 工程质量门 | manifest 可解析、artifact 匹配、validator 可满足、lifecycle 可投射 |
+
+## 9.5 本章回顾
 
 1. **Skills**：通过 `SKILL.md` 和少量 frontmatter 元数据改变模型上下文。runtime 会把多层目录压成一个去重后的 skill 视图，再生成 XML 摘要注入系统提示。
 
@@ -327,6 +372,8 @@ MCP client 发现到的 tool 不会直接无条件塞进 registry。注册前还
 4. **MCP**：不是“远程插件”，而是标准化协议接入。octos 当前支持 stdio 和 HTTP POST（可选 SSE 响应），并用 schema 验证、名称保护、SSRF 与 DNS pinning 约束风险。
 
 5. **架构边界**：`octos-agent/src/plugins/*` 是当前 runtime 热路径；`crates/octos-plugin` 是 SDK / tooling crate。把这两层分清，读源码时就不会迷路。
+
+6. **Harness**：ABI versioning、event sink、validator runner 和 starter app skills 共同定义扩展工程契约，让外部能力可验证、可观测、可升级。
 
 Part 2 到此结束。下一章开始 Part 3，从单机会话推进到消息总线与多会话编排。
 

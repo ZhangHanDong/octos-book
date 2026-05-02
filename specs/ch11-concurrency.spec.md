@@ -10,13 +10,15 @@ estimate: 1d
 
 octos 的并发模型是其性能和可靠性的基石。本章展示 session actor、
 actor 内部消息任务、信号量限流、工具并发执行和 TaskSupervisor 等机制如何协同工作，
-是 Rust 异步编程的生产级实战教材。
+是 Rust 异步编程的生产级实战教材。当前主分支中 MCP server lifecycle、
+background spawn lifecycle、harness events 和 swarm dispatch 都复用或投射到这些
+生命周期概念，本章需要补足 `TaskSupervisor` 与 CLI/MCP/Harness 控制面的连接。
 
 ## 决策
 
 - 源码分散在多个 crate，以模式为主线而非文件为主线
-- 重点代码: session actor、Agent spawn 逻辑、join_all 工具并发、TaskSupervisor、AtomicBool 关停
-- 图表: 并发模型全景图（Mermaid）、消息处理并发/串行分界
+- 重点代码: session actor、Agent spawn 逻辑、join_all 工具并发、TaskSupervisor、MCP server lifecycle observer、AtomicBool 关停
+- 图表: 并发模型全景图（Mermaid）、消息处理并发/串行分界、Task lifecycle projection 图
 - 工程决策侧栏: 从共享 Mutex 到 Session Actor 的取舍
 
 ## 边界
@@ -74,3 +76,11 @@ actor 内部消息任务、信号量限流、工具并发执行和 TaskSuperviso
   当 阅读工程决策侧栏
   那么 对比了共享 Mutex、完全无状态 spawn-per-message 和 Session Actor
   并且 解释了 octos 当前选择 Session Actor 的状态所有权优势和实现复杂度
+
+场景: Task lifecycle 投射到 MCP 和 Harness
+  测试: review_ch11_task_lifecycle_projection
+  当 阅读 TaskSupervisor / lifecycle 小节
+  那么 说明 MCP server 的 `run_octos_session` 通过 lifecycle observer 标记 Running、Verifying、Ready 或 Failed
+  并且 说明外层 MCP caller 接收的是 session aggregate outcome，而不是内部工具事件流
+  并且 说明 background spawn lifecycle 会通过 harness events / metrics 进入 operator 可观测面
+  并且 包含 Task lifecycle projection Mermaid 图

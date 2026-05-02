@@ -42,11 +42,37 @@ Web 服务器（`crates/octos-cli/src/commands/serve.rs`）。默认端口 50080
 
 提供 Web Dashboard、REST 端点、SSE 流式输出，以及 AppUI 使用的 UI Protocol WebSocket（`/api/ui-protocol/ws`）。通过 axum 框架构建，AppState 持有全局状态（Provider、工具注册表、会话管理器等）。
 
+更准确地说，Serve 模式现在是控制面汇聚点，而不是“把 chat 包成 HTTP”。启动时它会组合 Config / ProfileStore、LLM Provider / RetryProvider、ToolRegistry / ToolPolicy、SessionManager、REST/SSE/UI Protocol，以及 swarm dispatch state。swarm state 还会把 `config.tool_policy` 和注入型环境变量 denylist 投射成 `DispatchPolicy::from_agent_gates(tool_policy, true)`，避免 swarm backend 绕过 native tool policy（`crates/octos-cli/src/commands/serve.rs:1128-1156`）。
+
+```mermaid
+flowchart TD
+    Serve[octos serve] --> Config[Config + ProfileStore]
+    Serve --> Provider[LlmProvider / RetryProvider]
+    Serve --> Tools[ToolRegistry + ToolPolicy]
+    Serve --> Sessions[SessionManager]
+    Serve --> UI[REST + SSE + UI Protocol]
+    Serve --> Swarm[SwarmState]
+    Tools --> Policy[DispatchPolicy::from_agent_gates]
+    Policy --> Swarm
+```
+
 ### 13.1.4 MCP Serve 模式（`octos mcp-serve`）
 
 `octos mcp-serve` 不是给人直接聊天的入口，而是把 octos 暴露成 MCP server，供外层 orchestrator 调用（`crates/octos-cli/src/commands/mcp_serve.rs:1-5`）。默认 transport 是 `stdio`，也支持 HTTP transport；HTTP 模式要求通过 `OCTOS_MCP_SERVER_TOKEN` 配置 bearer token（`crates/octos-cli/src/commands/mcp_serve.rs:7-11`）。
 
 这个入口的关键差异是：每次 `run_octos_session` 调用都会加载 profile 配置，构造 LLM，标记任务 Running，创建 Agent，运行 prompt，验证 artifact，最后把任务转成 Ready 或 Failed（`crates/octos-cli/src/commands/mcp_serve.rs:13-30`）。换句话说，MCP Serve 的职责不是维护一个长期交互 UI，而是把 octos 的 Agent 能力包装成可由外部系统调度的任务执行接口。
+
+这里还要避免一个误解：MCP Serve 不会把 octos 内部工具目录直接暴露给外层系统。`mcp_server.rs` 明确只暴露一个 session-level tool：`run_octos_session`；外层 caller 得到的是 aggregate outcome，看不到内部 tool calls、iteration events 或 progress stream（`crates/octos-agent/src/mcp_server.rs:1-34`）。
+
+```mermaid
+flowchart LR
+    Orchestrator[MCP client / outer agent] --> Tool[run_octos_session]
+    Tool --> Dispatch[RealSessionDispatch]
+    Dispatch --> Agent[Agent::run_task]
+    Agent --> Contract[Workspace contract + validators]
+    Contract --> Outcome[McpSessionOutcome]
+    Outcome --> Orchestrator
+```
 
 | 维度 | CLI | Gateway | Serve | MCP Serve |
 |------|-----|---------|-------|-----------|
@@ -215,7 +241,9 @@ octos 通过 Cargo feature flags 控制条件编译：
 1. **四种模式**：CLI（终端交互）、Gateway（消息 bot）、Serve（Web/API/AppUI）、MCP Serve（外部 orchestrator 调用），同一代码库四种入口。
 2. **配置层次**：本地 > 全局 > 默认，Provider 自动检测简化配置。
 3. **热加载**：SHA-256 轮询检测。文件热加载当前只覆盖 `system_prompt` 和 `max_history`；provider/model 的运行时切换走 `SwappableProvider` + `model_check` 工具；`base_url`、`hooks`、`MCP` 等仍需重启。
-4. **Feature Flags**：按需编译，最小化部署体积。
+4. **Serve 控制面**：Serve 汇聚 REST、SSE、UI Protocol、profile、tool policy 和 swarm state，不只是 chat 的 HTTP 外壳。
+5. **MCP Serve 边界**：MCP Serve 只暴露 session-level `run_octos_session`，外层 orchestrator 收到 aggregate outcome，而不是内部工具事件流。
+6. **Feature Flags**：按需编译，最小化部署体积。
 
 ---
 

@@ -472,7 +472,42 @@ loop {
 
 ---
 
-## 5.8 本章回顾
+## 5.8 主干演进：typed recovery state machine
+
+当前主分支里的 Agent Loop 已经不只是“循环调用 LLM、执行工具、继续下一轮”。运行时把错误恢复建模成一条 typed control flow：`HarnessError` 先把原始 `eyre::Report` 归类成稳定 variant，再由 `RecoveryHint` 映射到 `LoopDecision`，最后由 loop 决定继续、压缩、升级或退出（`crates/octos-agent/src/harness_errors.rs:93-233`; `crates/octos-agent/src/agent/loop_state.rs:126-148`）。
+
+| 失败类型 | RecoveryHint | LoopDecision | 运行时含义 |
+|----------|--------------|--------------|------------|
+| `RateLimited` / `Network` / `Timeout` | `BackoffRetry` | `Continue` | 暂态失败，下一轮可继续 |
+| `ContextOverflow` | `CompactContext` | `CompactAndRetry` | 先压缩上下文，再重试 |
+| `ProviderUnavailable` | `SwitchProvider` | `RotateAndRetry` | 语义上应换 provider lane |
+| `Authentication` / `InvalidRequest` / `ContentFiltered` | `FailFast` | `Escalate` | 配置或请求本身不可恢复 |
+| `DelegateDepthExceeded` | `FailFast` | `Escalate` | 防止子任务递归扩散 |
+| `Internal` | `Bug` | `Escalate` | 运行时 invariant broken |
+
+这里有一个容易写错的边界：`ProviderUnavailable` 的语义是 `RotateAndRetry`，但当前 `handle_loop_error_with_dispatch` 里没有 agent 内部的 provider lane 切换 hook；代码会记录 warning 并 bail，把 lane rotation 留给外层 provider chain 或调用者处理（`crates/octos-agent/src/agent/loop_runner.rs:336-350`）。所以书中不能把它描述成“当前 loop 内自动切换 provider”。
+
+`LoopRetryState` 也不是一个全局 retry counter。它为每个 `HarnessError` variant 维护独立 bucket 和 hard limit；超过 limit 返回 `Exhausted`，不会无限重试（`crates/octos-agent/src/agent/loop_state.rs:70-104`, `crates/octos-agent/src/agent/loop_state.rs:171-253`）。`ContextOverflow` 默认只允许有限次 compact，`DelegateDepthExceeded` 默认一次后收敛，shell spiral 虽然不是 `HarnessError`，也通过同一 retry ledger 记录为 `shell_spiral`。
+
+```mermaid
+stateDiagram-v2
+    [*] --> ObserveError
+    ObserveError --> Continue: BackoffRetry and bucket ok
+    ObserveError --> CompactAndRetry: ContextOverflow and bucket ok
+    ObserveError --> RotateAndRetry: ProviderUnavailable and bucket ok
+    ObserveError --> Escalate: FailFast or Bug
+    ObserveError --> Exhausted: bucket > limit
+    CompactAndRetry --> RunCompaction
+    RunCompaction --> NextIteration
+    Continue --> NextIteration
+    RotateAndRetry --> BailInCurrentRelease: no in-band lane hook
+```
+
+这条路径已经实际接入主循环：`CompactAndRetry` 分支会调用 turn compaction helper，然后返回 `Retry` 继续外层循环（`crates/octos-agent/src/agent/loop_runner.rs:321-339`）。因此 Ch8 中的上下文压缩不只是 token 预算优化，而是 Agent Loop 的错误恢复机制之一。
+
+最后，retry bucket 还可以跨 turn 存活。`PersistentRetryStateGuard` 构造时从共享 `Arc<Mutex<LoopRetryState>>` hydrate，drop 时写回；未配置持久化 handle 的 session 则保持旧的“每轮新状态”行为（`crates/octos-agent/src/agent/loop_runner.rs:126-170`）。这给本章一个重要分层：消息、summary 和 workspace contract 是 prompt-visible state；retry bucket、grace eligibility 和 task lifecycle 是 runtime control state；validator ledger、harness event sink、cost ledger 则是 durable evidence state。
+
+## 5.9 本章回顾
 
 Agent Loop 是 octos 的灵魂——一个精心编排的 while 循环：
 
@@ -487,6 +522,8 @@ Agent Loop 是 octos 的灵魂——一个精心编排的 while 循环：
 5. **Token 追踪**：原子计数器实时更新，支持 CLI/Web UI 的成本显示。
 
 6. **流式超时**：自适应 TTFT（与输入大小成正比），避免长上下文场景的误判。
+
+7. **typed recovery**：`HarnessError`、`LoopRetryState` 和 `LoopDecision` 让错误恢复成为有界状态机；`CompactAndRetry` 已经接入主循环，provider lane rotation 则仍由外层 provider chain 承担。
 
 下一章将深入工具系统——Agent Loop 中"行动"阶段的核心：14 个内置工具如何注册、调用和安全管控。
 
