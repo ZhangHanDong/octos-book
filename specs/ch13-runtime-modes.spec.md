@@ -1,22 +1,22 @@
 spec: task
-name: "Ch13. 三种运行模式与配置体系"
+name: "Ch13. 四种运行模式与配置体系"
 inherits: project
-tags: [part3, cli, gateway, serve, config, feature-flags]
+tags: [part3, cli, gateway, serve, mcp-serve, config, feature-flags]
 depends: [ch05-agent-loop, ch10-message-bus]
 estimate: 1d
 ---
 
 ## 意图
 
-octos 提供 CLI/Gateway/Serve 三种运行模式，配合配置优先级、热加载、
+octos 提供 CLI/Gateway/Serve/MCP Serve 四种运行模式，配合配置优先级、热加载、
 Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理解如何选择
 运行模式以及配置变更如何传播。
 
 ## 决策
 
 - 源码文件: `crates/octos-cli/src/main.rs`, `config.rs`, `config_watcher.rs`
-- 命令入口: `chat.rs`, `gateway.rs`, `serve.rs`(API routes)
-- 图表: 三种模式架构对比图、配置优先级链路、热加载流程
+- 命令入口: `chat.rs`, `gateway.rs`, `serve.rs`(API routes), `mcp_serve.rs`
+- 图表: 四种模式架构对比图、配置优先级链路、热加载流程
 - 工程决策侧栏: 热加载 vs 全重启的边界划分
 
 ## 边界
@@ -36,11 +36,13 @@ Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理
 
 ## 完成条件
 
-场景: 三种运行模式对比清晰
-  测试: review_ch13_three_modes
+场景: 四种运行模式对比清晰
+  测试: review_ch13_four_modes
   当 阅读运行模式小节
-  那么 包含 CLI/Gateway/Serve 三种模式的架构对比表
+  那么 包含 CLI/Gateway/Serve/MCP Serve 四种模式的架构对比表
   并且 每种模式说明了入口函数、适用场景、支持的功能边界
+  并且 Serve 默认端口写为 50080
+  并且 MCP Serve 说明默认 stdio、HTTP bearer token 和外层 orchestrator 调用场景
 
 场景: 配置优先级完整
   测试: review_ch13_config_priority
@@ -52,7 +54,7 @@ Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理
   测试: review_ch13_hot_reload
   当 阅读热加载小节
   那么 解释了 SHA-256 hash 变更检测的实现
-  并且 区分了热加载项（system prompt）和需重启项（provider/model/hooks）
+  并且 区分了热加载项（system prompt/max_history）、provider/model 的显式运行时切换路径，以及需重启项（base_url/api_key_env/hooks）
   并且 说明了 config_watcher 的工作流程
 
 场景: Feature Flags
@@ -64,5 +66,5 @@ Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理
 场景: 热加载边界侧栏
   测试: review_ch13_reload_sidebar
   当 阅读工程决策侧栏
-  那么 解释了为什么 system prompt 可以热加载而 provider 需要重启
+  那么 解释了为什么 system prompt 可以热加载，而 provider/model 的文件变更不会被 watcher 自动应用
   并且 说明了这个边界划分的安全和一致性考量

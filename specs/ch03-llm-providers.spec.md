@@ -9,7 +9,7 @@ estimate: 1.5d
 ## 意图
 
 octos-llm（约 13000 行）是整个系统与外部 LLM 的桥梁。本章展示如何用 Rust
-trait 抽象统一 4 种原生协议和 10+ 种兼容 Provider，以及如何构建三层容错链
+trait 抽象统一少数专用协议实现和 10+ 种兼容 Provider，以及如何构建三层容错链
 实现生产级可靠性。SSE 流式解析的工程细节对 AI 应用开发者尤其有价值。
 
 ## 决策
@@ -45,8 +45,9 @@ trait 抽象统一 4 种原生协议和 10+ 种兼容 Provider，以及如何构
 场景: Provider 注册表完整
   测试: review_ch03_provider_registry
   当 阅读 Provider 注册表小节
-  那么 列出了所有 4 种原生 + 10 种兼容 Provider 及其 base URL
+  那么 列出了当前注册表中的 15 个 Provider 及其协议/别名/示例模型
   并且 解释了模型名自动检测机制（claude→anthropic, gpt→openai）
+  并且 说明了专用实现与兼容适配的边界（如 Ollama 复用 OpenAI 兼容层）
 
 场景: 三层容错链逐层讲解
   测试: review_ch03_failover_chain

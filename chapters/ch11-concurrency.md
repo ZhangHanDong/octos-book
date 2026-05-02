@@ -8,14 +8,14 @@
 
 ## 11.1 分层 Spawn：会话、消息、工具、子 Agent
 
-当前 octos 的 `tokio::spawn()` 不是只出现在一个地方，而是分布在四个层级：
+当前 octos 的 `tokio::spawn()` 不是只出现在一个地方，而是分布在四个层级，外加一层专门管理 `spawn_only` 生命周期的状态监督器：
 
 1. **会话级 actor**：`ActorRegistry` 为新 session 创建 actor，`ActorFactory::spawn()` 最终通过 `tokio::spawn(actor.run())` 启动一个长期存活的 per-session 任务（[`crates/octos-cli/src/session_actor.rs:198-309`]、[`crates/octos-cli/src/session_actor.rs:738-758`]）
 2. **消息级 agent task**：在 API / speculative 路径下，actor 会再把当前消息的主 Agent 调用派生成独立任务，这样 actor 自己还能继续轮询 inbox，及时接收取消、overflow、后台结果和状态事件（[`crates/octos-cli/src/session_actor.rs:1920-1963`]）
 3. **工具级任务**：单轮 LLM 返回多个 tool call 时，`execute_tools()` 会为每个工具各自 `tokio::spawn()`，然后用 `join_all()` 汇总结果（[`crates/octos-agent/src/agent/execution.rs:32-50`]、[`crates/octos-agent/src/agent/execution.rs:372-455`]）
 4. **后台子 Agent / spawn_only**：`spawn` 工具的 background 模式会再起一个长期子 Agent；`spawn_only` 工具也会在工具执行层单独起后台任务（[`crates/octos-agent/src/tools/spawn.rs:399-470`]、[`crates/octos-agent/src/agent/execution.rs:105-245`]）
 
-这种分层 spawn 的好处是并发边界清晰：会话级隔离保证状态所有权，消息级派生保证 actor 还能继续响应控制消息，工具级并发保证单轮性能，后台子 Agent 则把长任务从主对话流中剥离出去。Tokio 的 `JoinHandle` 还把 panic 封装为 `JoinError`，避免一个子任务直接把整条并发链路拖垮。
+这种分层 spawn 的好处是并发边界清晰：会话级隔离保证状态所有权，消息级派生保证 actor 还能继续响应控制消息，工具级并发保证单轮性能，后台子 Agent 则把长任务从主对话流中剥离出去。`spawn_only` 不是 fire-and-forget；它的可见状态由 `TaskSupervisor` 维护。Tokio 的 `JoinHandle` 还把 panic 封装为 `JoinError`，避免一个子任务直接把整条并发链路拖垮。
 
 ## 11.2 Session Actor：会话级状态所有权
 
@@ -190,6 +190,19 @@ tokio::spawn(async move {
 - 简短的 `✓` / `✗` 生命周期通知会直接发给用户，不触发额外 LLM 回合（[`crates/octos-cli/src/session_actor.rs:984-999`]）
 - 完整后台报告会先注入会话，再由 actor 触发一次 rewrite message，把原始报告改写成更适合用户阅读的输出（[`crates/octos-cli/src/session_actor.rs:998-1017`]）
 
+### 11.5.3 TaskSupervisor：spawn_only 的状态真相
+
+`spawn_only` 工具的难点不在于“能不能 `tokio::spawn` 一个任务”，而在于后台任务启动后如何让前端、父 Agent 和控制 API 都看到同一份生命周期真相。当前源码把这部分抽成了 `TaskSupervisor`（`crates/octos-agent/src/task_supervisor.rs:1-9`）。
+
+`TaskSupervisor` 维护后台任务 ledger：任务创建后进入 `Spawned`，执行时进入 `Running`，最后落到 `Completed`、`Failed` 或 `Cancelled` 这类终态（`crates/octos-agent/src/task_supervisor.rs:88-123`）。更细的运行时阶段还包括 `ExecutingTool`、`ResolvingOutputs`、`VerifyingOutputs`、`DeliveringOutputs`、`CleaningUp`，最终再映射到对外可见的 `Queued`、`Running`、`Verifying`、`Ready`、`Failed`、`Cancelled`（`crates/octos-agent/src/task_supervisor.rs:146-190`）。
+
+这里有两个容易被低估的生产约束：
+
+- **fan-out 上限**：单个父任务默认最多 200 个子任务，环境变量 `OCTOS_MAX_CHILDREN_PER_PARENT` 可以覆盖；超过上限后，supervisor 不会继续无界派生（`crates/octos-agent/src/task_supervisor.rs:29-42`）。
+- **workspace contract 先于状态更新**：工作区边界、输出声明和 artifact 验证在 `execution.rs` 热路径中完成后，supervisor 才接收状态更新；也就是说它记录的是已经通过执行层约束检查的状态，而不是任意后台线程自报的状态。
+
+这解释了为什么 AppUI 可以安全地提供 task list / cancel / restart 这类控制能力：它读写的是 supervisor 维护的受控状态机，而不是从日志里猜测后台任务进度。
+
 ---
 
 ## 11.6 优雅关停
@@ -241,7 +254,52 @@ if shutdown.load(Ordering::Relaxed) { ... } // Agent 线程
 
 ---
 
-## 11.7 Heartbeat 与 Cron
+## 11.7 冷启动优势：常驻进程 vs fork/exec
+
+传统的 per-request fork/exec 模型会为每条消息重复创建进程、加载运行时、初始化 Provider 与工具注册表，然后处理完就退出。octos 的 Gateway/Serve 模式采用**常驻进程 + Tokio 异步运行时**，把这类初始化尽量前移到启动阶段：
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ fork/exec 模型（每条消息）                                  │
+│                                                          │
+│  fork → load runtime → init provider → build tools →     │
+│  process message → exit                                  │
+│  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ │
+│  每条消息都重复做初始化                                      │
+└──────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────┐
+│ octos 常驻进程模型                                         │
+│                                                          │
+│  一次启动：init main provider stack + build tools + start │
+│            channels/services                             │
+│  ──────────────────────────────────────────────────────── │
+│  每条消息：dispatch → actor.send() → process              │
+│  重复开销缩小为 actor 查找/创建与排队                       │
+└──────────────────────────────────────────────────────────┘
+```
+
+具体来说，Gateway 启动时会先为**主 profile**构建默认的 LLM/provider stack；如果配置了 fallback models，会在这一阶段一并构造 `RetryProvider`、`ProviderChain` 或 `AdaptiveRouter` 所需的候选链路，然后再包进 `SwappableProvider` 供主 profile 会话复用（`crates/octos-cli/src/commands/gateway/gateway_runtime.rs:187-259`）。
+
+目标 profile 则走另一条路径：首次消息分发到某个 profile 时，Gateway 按需构建该 profile 的 `ActorFactory`，并缓存到 `ActorRegistry::profile_factories`；后续同一 profile 的新会话复用这个工厂，而不是每条消息都重新初始化（`crates/octos-cli/src/session_actor.rs:145-174`, `crates/octos-cli/src/commands/gateway/profile_factory.rs:248-258`）。
+
+`PROFILE_PROMPT_CACHE_CAP = 128` 的 prompt cache 也是同类优化，但它只用于“目标 profile 尚未注册独立 factory”的 fallback 路径：这时 Gateway 会把从 profile store 读取到的 system prompt 临时缓存在内存里，避免反复访问磁盘（`crates/octos-cli/src/commands/gateway/gateway_runtime.rs:48`, `crates/octos-cli/src/commands/gateway/gateway_runtime.rs:1565-1593`）。
+
+之后每条消息的处理路径只有：
+
+1. `ActorRegistry::dispatch()` 查找或创建 session actor
+2. `actor.tx.send(message)` 将消息发到 actor 的 mailbox
+3. Actor 开始真正处理消息时才获取 Semaphore permit，然后进入 Agent 迭代
+
+空闲 actor 常驻内存但不占用并发槽位（详见 11.3 信号量限流）——Semaphore permit 在 actor 真正开始处理消息时才获取，不在 actor 创建时获取（`crates/octos-cli/src/session_actor.rs:1803-1808`）。这意味着 1000 个会话可以同时存在，但只有 10 个在活跃处理。
+
+这类优势可以从源码确认，但**不能仅凭源码推出固定的毫秒级收益**。真实延迟仍取决于 Provider、工具链、网络和部署环境；本章能确定的是“初始化被前移并按 profile/session 复用”，而不是某个通用的 benchmark 数字。
+
+常驻模型的另一个实际收益是**会话级短期状态可以持续累积**。同一会话的 actor 默认存活 30 分钟（`DEFAULT_IDLE_TIMEOUT_SECS = 1800`），因此该 actor 持有的工具注册表和 LRU 热度统计能在会话生命周期内持续更新；fork/exec 模型则天然做不到这种跨消息的短期状态保留。
+
+---
+
+## 11.8 Heartbeat 与 Cron
 
 octos 支持定时触发 Agent 会话，三种调度类型：
 
@@ -282,7 +340,7 @@ octos 支持定时触发 Agent 会话，三种调度类型：
 1. **分层并发**：octos 现在是“Gateway dispatch → session actor → actor 内部消息任务 / 工具任务 / 子 Agent”这套分层 spawn 结构，不是单一的 per-message spawn 模型。
 2. **Session Actor**：每个会话都有自己的 ToolRegistry、SessionHandle、workspace 和 mailbox，状态所有权清晰。
 3. **Semaphore 限流**：默认 10 个活跃处理槽位；permit 在真正处理消息时获取，而不是在 actor 创建时占坑。
-4. **工具与后台任务**：`join_all` 负责单轮工具并发，`spawn` / `spawn_only` 负责把长任务从主回路拆出去。
+4. **工具与后台任务**：`join_all` 负责单轮工具并发，`spawn` / `spawn_only` 负责把长任务从主回路拆出去；`TaskSupervisor` 负责 `spawn_only` 的状态 ledger、取消态和 fan-out 上限。
 5. **优雅关停**：Gateway shutdown flag 和 per-session cancelled flag 分层配合，配上 Release/Acquire 语义，让接入停止、任务取消、actor 回收和服务 stop 有明确边界。
 
 ---

@@ -59,13 +59,13 @@ pub struct Episode {
 }
 ```
 
-**EpisodeOutcome**（`episode.rs:72-81`）有四个变体：`Success`、`Failure`、`Blocked`、`Cancelled`。这与 TaskStatus（详见第 2 章）的终态一一对应——Episode 只在 Task 到达终态时创建。
+**EpisodeOutcome**（`episode.rs:72-81`）定义了内存层可表达的四种结果：`Success`、`Failure`、`Blocked`、`Cancelled`。它和 Task 的几类终态语义相近，但不能反推"系统一定会把所有终态都写成 Episode"；是否落库取决于上层调用点。当前主 Agent loop 实际只会写入 `Success` episode。
 
 **`schema_version`** 字段（`episode.rs:24`）是前向兼容的关键。当 Episode 的格式需要升级时（比如新增字段），旧版本的数据仍然可以通过版本号正确解析。默认值为 `1`（`episode.rs:16-17`），反序列化时如果 JSON 中没有这个字段，自动填充默认值。
 
 ### 4.2.2 写入时机
 
-Episode 在 Task 完成时创建并存储（`store.rs:87-151`）。写入过程：
+在当前主 Agent 路径里，Episode 只会在 LLM 响应以 `StopReason::EndTurn` 或 `StopSequence` 正常结束，且 `save_episodes` 打开时创建并存储（`crates/octos-agent/src/agent/loop_runner.rs:368-395`，落库逻辑位于 `crates/octos-memory/src/store.rs:87-151`）。写入过程：
 
 1. 将 Episode 序列化为 JSON，存入 `EPISODES_TABLE`
 2. 更新 `CWD_INDEX_TABLE`，将 Episode ID 追加到对应工作目录的列表中
@@ -107,7 +107,7 @@ fn tokenize(text: &str) -> Vec<String> {
 }
 ```
 
-采用最简单的分词方式——转小写后按非字母数字字符分割，过滤掉长度小于 2 的词项。对于中文，这种分词实际上按字符分割（每个汉字是一个字母数字字符），效果不如专业分词器（如 jieba），但胜在零依赖、零误差，且对于 Agent 经验摘要的检索场景已经足够。
+采用最简单的分词方式——转小写后按非字母数字字符分割，过滤掉长度小于 2 的词项。对于中文，这并不会自动按单字切开：连续中文（如 `中文测试`）会保留成一个 token，只有遇到空格、标点等非字母数字字符才会断开，所以 `中文 测试` 会分成 `中文` 和 `测试` 两个 token；中英混写串（如 `重构parser模块`）也会连成一个 token。效果不如专业分词器（如 jieba），但胜在零依赖，适合摘要式经验检索。
 
 ### 4.3.2 BM25 评分公式
 

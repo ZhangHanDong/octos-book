@@ -171,7 +171,7 @@ octos 采用 Cargo workspace 组织代码。若按主架构口径计算，可以
 
 **第三层：用户入口**
 
-- **octos-cli**（40,746 行）：CLI 与 Web 入口——整个系统的"前门"。提供三种运行模式（`octos chat` 交互式 CLI、`octos gateway` 消息总线、`octos serve` Web Dashboard + REST API）。通过 feature flags 控制各频道集成（telegram、discord、slack 等）的编译。依赖 octos-core、octos-agent、octos-llm、octos-memory、octos-pipeline、octos-bus。
+- **octos-cli**（40,746 行）：CLI、Web 与 MCP Server 入口——整个系统的"前门"。提供四种运行模式（`octos chat` 交互式 CLI、`octos gateway` 消息总线、`octos serve` Web Dashboard + REST/API/AppUI、`octos mcp-serve` 外部 orchestrator 调用入口）。通过 feature flags 控制各频道集成（telegram、discord、slack 等）的编译。依赖 octos-core、octos-agent、octos-llm、octos-memory、octos-pipeline、octos-bus。
 
 ### 1.3.2 依赖拓扑图
 
@@ -225,7 +225,7 @@ graph BT
 
 | Crate | 代码行数 | 占比 | 核心职责 |
 |-------|---------|------|---------|
-| octos-cli | 40,746 | 30.6% | 三种运行模式 + Web UI + REST API |
+| octos-cli | 40,746 | 30.6% | 四种运行模式 + Web UI + REST API + MCP Serve |
 | octos-agent | 34,968 | 26.3% | Agent 主循环 + 工具系统 + 安全策略 |
 | octos-bus | 19,634 | 14.8% | 14 频道集成 + 会话管理 |
 | octos-llm | 15,728 | 11.8% | 多 Provider 抽象 + 容错 + 流式 |

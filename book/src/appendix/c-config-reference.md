@@ -43,7 +43,23 @@
 | 字段路径 | 类型 | 默认值 | 说明 |
 |---------|------|--------|------|
 | `serve.host` | string | "127.0.0.1" | 绑定地址 |
-| `serve.port` | u16 | 3000 | 绑定端口 |
+| `serve.port` | u16 | 50080 | 绑定端口 |
+
+## Profile LLM 配置
+
+Profile 文件位于 `~/.octos/profiles/<id>.json`。当前主分支的 profile LLM 配置不再只是顶层 `provider` / `model` 字段，而是放在 `config.llm` 下：
+
+| 字段路径 | 类型 | 说明 |
+|---------|------|------|
+| `config.llm.primary.family_id` | string | 主模型家族 ID，例如 `anthropic`、`openai` |
+| `config.llm.primary.model_id` | string | 主模型 ID |
+| `config.llm.primary.route.base_url` | string? | 当前模型路由的 API endpoint 覆盖 |
+| `config.llm.primary.route.api_key_env` | string? | 当前模型路由的 API key 环境变量 |
+| `config.llm.primary.route.api_type` | string? | OpenAI-compatible / Anthropic / 其他 API 类型提示 |
+| `config.llm.primary.model_hints` | object | 模型能力、成本、上下文窗口等提示 |
+| `config.llm.primary.cost_per_m` | object? | 每百万 token 成本 |
+| `config.llm.primary.strong` | bool? | 是否标记为强模型 |
+| `config.llm.fallbacks[]` | object[] | fallback 模型列表，元素结构同 `primary` |
 
 ## MCP 服务器
 
@@ -58,12 +74,13 @@
 
 | 字段路径 | 类型 | 说明 |
 |---------|------|------|
-| `hooks.before_tool_call` | object[] | 工具调用前钩子 |
-| `hooks.after_tool_call` | object[] | 工具调用后钩子 |
-| `hooks.before_llm_call` | object[] | LLM 调用前钩子 |
-| `hooks.after_llm_call` | object[] | LLM 调用后钩子 |
+| `hooks[]` | object[] | Hook 列表 |
+| `hooks[].event` | string | 触发事件，例如 `before_tool_call` / `after_tool_call` |
+| `hooks[].command` | string[] | argv 形式的命令，不经过 shell |
+| `hooks[].timeout_ms` | u64 | 超时时间 |
+| `hooks[].tool_filter` | string[] | 仅匹配指定工具；空数组表示不按工具过滤 |
 
-每个 hook 对象：`{ "command": ["cmd", "arg1"], "timeout_ms": 5000, "tool_filter": "shell" }`
+每个 hook 对象：`{ "event": "before_tool_call", "command": ["cmd", "arg1"], "timeout_ms": 5000, "tool_filter": ["shell"] }`
 
 ## 示例配置
 
@@ -90,10 +107,13 @@
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"]
     }
   },
-  "hooks": {
-    "before_tool_call": [
-      { "command": ["./audit-hook.sh"], "timeout_ms": 3000 }
-    ]
-  }
+  "hooks": [
+    {
+      "event": "before_tool_call",
+      "command": ["./audit-hook.sh"],
+      "timeout_ms": 3000,
+      "tool_filter": ["shell"]
+    }
+  ]
 }
 ```
