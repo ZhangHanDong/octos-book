@@ -41,6 +41,7 @@ Feature Flags 形成完整的运行时体系。本章帮助用户和贡献者理
   当 阅读运行模式小节
   那么 包含 CLI/Gateway/Serve/MCP Serve 四种模式的架构对比表
   并且 每种模式说明了入口函数、适用场景、支持的功能边界
+  并且 Gateway Profile 模式说明子账号继承的是结构化 profile sections 和 env_vars base，而不是旧顶层 provider/model 字段
   并且 Serve 默认端口写为 50080
   并且 MCP Serve 说明默认 stdio、HTTP bearer token 和外层 orchestrator 调用场景
 

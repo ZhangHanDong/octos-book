@@ -45,15 +45,16 @@ When reviewing code, focus on:
 `SkillsLoader` 本身只维护一个“技能目录列表”，真正的优先级是在 runtime 里组装出来的（`crates/octos-agent/src/skills.rs:31-176`）。当前 gateway 路径的优先级是：
 
 1. `data_dir/skills`
-2. 父 profile 的 `.../skills`（子账号场景）
-3. `project_dir/skills`
-4. `project_dir/bundled-app-skills`
-5. `OCTOS_SKILLS_PATH` 指定的额外目录
-6. 编译进二进制的 built-in skills
+2. `project_dir/skills`
+3. `project_dir/bundled-app-skills`
+4. `OCTOS_SKILLS_PATH` 指定的额外目录
+5. 编译进二进制的 built-in skills
 
-这套层次来自 `crates/octos-cli/src/commands/gateway/gateway_runtime.rs:461-488` 和 `crates/octos-cli/src/commands/gateway/profile_factory.rs:272-284`。实现方式也很有意思：loader 先放入 builtins，再按“低优先级目录先扫描，高优先级目录后覆盖”的顺序遍历，并通过 `retain` 删掉同名旧 skill（`crates/octos-agent/src/skills.rs:68-108`）。
+这套层次来自 `crates/octos-cli/src/commands/gateway/gateway_runtime.rs:526-527,646-667` 和 `crates/octos-cli/src/commands/gateway/profile_factory.rs:538-617`。实现方式也很有意思：loader 先放入 builtins，再按“低优先级目录先扫描，高优先级目录后覆盖”的顺序遍历，并通过 `retain` 删掉同名旧 skill（`crates/octos-agent/src/skills.rs:68-108`）。
 
-所以这不是简单的“工作区覆盖全局”三层模型，而是一个更细的 **layered view**。读者如果只记住“先 profile，再 project，再 bundled，再 env path，最后 builtin”，就已经抓住当前实现的主线了。
+这里需要特别区分**配置继承**和**本地 skill 继承**：子账号可以继承父 profile 的 LLM/search/apps/email 等结构化配置，但 customer-installed skills 不从父账号继承。`skills_scope.rs` 明确把 account skills 限定为当前账号自己的 `data_dir/skills`，plugin dirs 也只返回当前 account 的 skills 目录（`crates/octos-cli/src/skills_scope.rs:1-38`）。这避免父账号安装的本地可执行扩展在子账号中被静默启用。
+
+所以这不是简单的“工作区覆盖全局”三层模型，而是一个更细的 **layered view**。读者如果只记住“当前账号 skills 最高优先级；project/bundled/env/builtin 提供共享基线；父账号 customer skills 不进入子账号”，就已经抓住当前实现的主线了。
 
 ### 9.1.3 XML 技能索引
 

@@ -278,11 +278,16 @@ Serve 模式还暴露 `/api/ui-protocol/ws`（`crates/octos-cli/src/api/router.r
 
 ---
 
-## 14.4 多租户：Profile + User + Session 三层隔离
+## 14.4 多租户：Profile + Account + User + Session 隔离
 
-octos 的多租户不是"给每个租户起一个独立进程"——它在**同一个 Gateway 进程内**通过三层抽象实现隔离。
+octos 的多租户不是单一层面的"租户 ID"字段，而是 Profile、子账号、用户工作区和会话 actor 共同组成的隔离模型。当前主分支还需要区分两条运行路径：
 
-### 14.4.1 Profile 层：租户配置隔离
+- **standalone Gateway 路径**：一个 Gateway 进程内通过 `ActorRegistry` 和 `ActorFactory` 管理多个 profile/session。
+- **admin/process-manager 路径**：`ProcessManager` 会为每个 profile 启动独立的 `octos gateway` 子进程，并通过 `--profile`、`--parent-profile`、`--data-dir`、`--cwd` 等参数把 profile 配置和数据目录传给子进程（`crates/octos-cli/src/process_manager.rs:241-283`）。
+
+因此本节的"多租户隔离"要分成两层看：配置和数据目录是 profile/account 级的；是否进程级隔离取决于运行入口。生产管理面通常走 process-manager 模式，单独的 `octos gateway` 则仍是同进程 actor 模型。
+
+### 14.4.1 Profile / Account 层：租户配置与子账号
 
 UserProfile（`crates/octos-cli/src/profiles.rs:18-40`）是租户的顶层抽象：
 
@@ -292,6 +297,7 @@ pub struct UserProfile {
     pub name: String,                  // 显示名称
     pub enabled: bool,                 // 是否自动启动
     pub data_dir: Option<String>,      // 数据目录覆盖
+    pub public_subdomain: Option<String>, // 子账号公开子域
     pub parent_id: Option<String>,     // 子账号继承
     pub config: ProfileConfig,         // 内联 LLM/工具/频道配置
     pub created_at: DateTime<Utc>,
@@ -300,12 +306,18 @@ pub struct UserProfile {
 ```
 
 每个 Profile 可以有独立的：
-- **LLM Provider 和模型**：Profile A 用 Claude，Profile B 用 GPT-4o
+- **LLM contract 和模型路由**：Profile A 用 Claude，Profile B 用 GPT-4o 或 fallback chain
 - **工具策略**：Profile A 允许 shell，Profile B 禁止
 - **系统提示**：不同 Profile 的 Agent 行为完全不同
 - **频道绑定**：Profile A 接入 Telegram，Profile B 接入 Discord
 
-**子账号继承**：`parent_id` 让子 Profile 继承父 Profile 的 `provider`、`model`、`base_url`、`api_key_env`、`api_type` 和 `fallback_models`（`crates/octos-cli/src/commands/gateway/gateway_runtime.rs:128-144`）。子 Profile 只需覆盖差异部分——比如使用同一个 Provider 但用不同的系统提示。
+**子账号创建规则**：`create_sub_account()` 要求父 profile 存在，并且父 profile 本身不能已经是子账号；子账号 ID 采用 `{parent_id}--{sub_account_id}` 形式，还会校验公开子域不冲突（`crates/octos-cli/src/profiles.rs:1180-1228`）。Admin API 提供 `GET /api/admin/profiles/:id/accounts` 列出子账号，以及 `POST /api/admin/profiles/:id/accounts` 创建子账号（`crates/octos-cli/src/api/admin.rs:1290-1385`）。
+
+**子账号继承**：当前主分支的继承粒度已经不是旧的顶层 `provider/model/base_url/api_key_env`。`resolve_effective_profile()` 会让子账号继承父 profile 的完整 `config.llm` contract；`search`、`deep_crawl`、`apps`、`email` 只有在子账号未配置时才继承；`env_vars` 以父级为 base，再由子账号覆盖同名变量（`crates/octos-cli/src/profiles.rs:1236-1273`）。process-manager 启动子账号 gateway 时还会传入 `--parent-profile`，并把父级 env vars 注入子进程，子账号自己的 env vars 优先（`crates/octos-cli/src/process_manager.rs:275-291`）。
+
+这带来的心智模型是：**父账号提供共享能力契约，子账号提供接入面和差异化覆盖**。例如父账号统一配置 LLM、搜索和邮件，子账号只配置自己的频道凭据、公开子域和少量 env override。
+
+**不继承 customer-installed skills**：子账号的 skills/plugin 目录是严格按当前 account 解析的。`skills_scope.rs` 明确说明 sub-account 不继承父 profile 安装的 customer skills；`resolve_account_skills_dir()` 和 `build_account_plugin_dirs()` 都只返回当前账号自己的 `data_dir/skills`（`crates/octos-cli/src/skills_scope.rs:1-38`）。这避免了父账号安装的本地可执行扩展在子账号里静默获得执行边界。
 
 `ActorRegistry` 为命中 profile factory 的会话复用同一个 `ActorFactory`（`crates/octos-cli/src/session_actor.rs:145,168-178`）。这个工厂内部持有共享的 `Arc<dyn LlmProvider>`，因此同一 profile 的会话会复用同一套 provider stack；不同 profile 可以有不同工厂——这是 Provider 级隔离的实现方式。
 
@@ -344,25 +356,52 @@ pub struct UserProfile {
 
 ```mermaid
 flowchart TD
-    subgraph "Gateway 进程"
-        subgraph "Profile A（租户 A）"
-            FA["ActorFactory A<br/>Claude + 严格策略"]
-            A1["User 1 Actor<br/>workspace: /data/users/tg:111/"]
-            A2["User 2 Actor<br/>workspace: /data/users/tg:222/"]
-        end
-        subgraph "Profile B（租户 B）"
-            FB["ActorFactory B<br/>GPT-4o + 宽松策略"]
-            B1["User 3 Actor<br/>workspace: /data/users/dc:333/"]
-        end
+    subgraph "Admin / ProcessManager 路径"
+        PM["ProcessManager"]
+        PPROC["parent gateway process<br/>--profile parent.json"]
+        SPROC["sub-account gateway process<br/>--profile child.json<br/>--parent-profile parent.json"]
+        PM --> PPROC
+        PM --> SPROC
     end
 
-    FA --> A1 & A2
-    FB --> B1
+    subgraph "Parent Profile"
+        PCFG["config.llm<br/>search / deep_crawl / apps / email"]
+        PENV["env_vars base"]
+        PSK["parent data_dir/skills<br/>仅父账号可见"]
+    end
+
+    subgraph "Sub-account Profile"
+        SCFG["channels / gateway / public_subdomain"]
+        SENV["env_vars override"]
+        SSK["child data_dir/skills<br/>不继承父 skills"]
+        SUSER["User workspace<br/>users/{channel:chat_id}/workspace"]
+        SSESSION["Session Actor<br/>JSONL history + cancel flag"]
+    end
+
+    PCFG -->|"inherit if missing / llm contract copied"| SCFG
+    PENV -->|"base"| SENV
+    PSK -. not inherited .-> SSK
+    SCFG --> SUSER
+    SUSER --> SSESSION
+
+    subgraph "Standalone Gateway 路径"
+        REG["ActorRegistry"]
+        FA["ActorFactory per profile"]
+        REG --> FA
+        FA --> SSESSION
+    end
 ```
 
-**图 14-2：多租户三层隔离。** 同一 Gateway 进程中，Profile 隔离 Provider/策略，User 隔离文件系统/沙箱，Session 隔离运行时状态。
+**图 14-2：Profile / 子账号 / User / Session 的隔离关系。** 父账号提供共享能力契约，子账号继承结构化配置但保持自己的频道、公开子域、数据目录和 customer skills。生产管理面可以为每个 profile 启动 gateway 子进程；standalone Gateway 则在同一进程里用 actor/factory 维护会话隔离。
 
-当前的隔离是**配置级 + 文件系统级**的，不是**进程级**的。这意味着一个 Profile 的 Agent 消耗过多 CPU 或内存可能影响同进程的其他 Profile。进程级隔离（每个 Profile 独立进程）是未来的优化方向。
+当前隔离的边界可以概括为：
+
+- **Profile / Account**：隔离 LLM contract、策略、频道、env、skills 和数据目录；子账号只继承明确允许的结构化配置。
+- **Process**：process-manager 模式下按 profile 启动 gateway 子进程；standalone Gateway 模式下仍是同进程 actor 隔离。
+- **User**：隔离 `workspace/` 和 `sessions/`，但长期 memory 仍挂在 profile/global data dir 下。
+- **Session**：隔离 ToolRegistry、JSONL history、取消标志和运行时 actor 状态。
+
+资源隔离仍不是完整的容器级隔离：即使 process-manager 将 profile 拆成子进程，如果没有 cgroup/container/系统级限额，一个 profile 的 CPU 或内存压力仍可能影响同一宿主机上的其他 profile。
 
 ---
 
@@ -393,7 +432,7 @@ flowchart TD
 1. **认证三流**：OpenAI 支持 OAuth PKCE（浏览器环境）和 Device Code（无浏览器）；其他 Provider 当前主要走 Paste-token。凭据写入 `~/.octos/auth.json`，Serve 主路由对 admin/test token 使用常量时间比较。
 2. **Hooks**：4 事件 × Shell 协议（argv 执行、exit code 决策）。Circuit breaker 3 次失败自动禁用。敏感参数自动脱敏。
 3. **监控**：Prometheus 指标 + 结构化日志 + SSE 事件流；其中 token 指标当前更适合趋势监控，不是精确计费真值。
-4. **多租户**：Profile、User、Session 三层隔离，以配置级和文件系统级为主，不是进程级隔离。
+4. **多租户**：Profile/Account、User、Session 分层隔离；子账号继承父账号结构化能力契约，但不继承 customer-installed skills；是否进程级隔离取决于 process-manager 还是 standalone Gateway 入口。
 
 全书 14 章到此结束。附录将提供完整的 Crate 依赖图、工具速查表、配置参考和贡献指南。
 
@@ -410,9 +449,9 @@ flowchart TD
 
 1. **Hook 的安全边界**：当前 Hooks 通过 argv 执行（无 Shell），但 Hook 命令本身可能是一个恶意程序。你会如何验证 Hook 命令的可信度？
 2. **Circuit Breaker 的恢复**：当前的实现在成功调用时重置计数器。但如果 Hook 被禁用后永远不再调用，它就永远无法恢复。你会如何设计一个"试探性恢复"机制？
-3. **多租户的资源隔离**：当前的多租户隔离是配置级的，不是进程级的。如果一个租户的 Agent 消耗了过多 CPU 或内存，会影响其他租户。你会如何实现资源级别的隔离？
+3. **多租户的资源隔离**：process-manager 可以把 profile 拆成 gateway 子进程，但资源限额仍不是自动获得的。如果一个 profile 的 Agent 消耗了过多 CPU 或内存，会影响同宿主机的其他 profile。你会如何实现资源级别的隔离？
 
 ---
 
 > **版本演化说明**
-> 本章分析基于 octos v0.1.0。截至本书写作时，OAuth PKCE 流程和 Hooks 系统无重大变化。Prometheus 指标列表可能随版本扩展。多租户支持可能在后续版本中增加进程级隔离。
+> 本章分析基于 octos v0.1.0。当前主分支已经把子账号继承推进到结构化 profile sections，并通过 process-manager 支持按 profile 启动 gateway 子进程；但资源级隔离仍需要额外的系统级限制。
