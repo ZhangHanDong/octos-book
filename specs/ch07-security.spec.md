@@ -22,6 +22,8 @@ estimate: 1.5d
 
 ### 允许修改
 - octos-book/chapters/ch07-*.md
+- octos-book/book/src/part2/ch07.md
+- octos-book/book-en/src/part2/ch07.md
 - octos-book/assets/ch07-*
 
 ### 禁止做
@@ -35,10 +37,12 @@ estimate: 1.5d
 
 ## 完成条件
 
-场景: 沙箱三后端完整对比
+场景: 沙箱后端与自动选择完整对比
   测试: review_ch07_sandbox_backends
+  Level: source-review
+  Targets: ../octos/crates/octos-agent/src/sandbox/mod.rs, ../octos/crates/octos-agent/src/sandbox/bwrap.rs, ../octos/crates/octos-agent/src/sandbox/macos.rs, ../octos/crates/octos-agent/src/sandbox/docker.rs
   当 阅读沙箱小节
-  那么 分别解释了 Bwrap、macOS sandbox-exec、Docker 三种后端的能力和限制
+  那么 分别解释了 Bwrap、macOS sandbox-exec、Docker 这些主要后端的能力和限制
   并且 说明了 `SandboxMode::Auto` 的有序探测链：Linux `bwrap`、macOS `sandbox-exec`、Windows `octos-sandbox` helper、Docker、最后 `NoSandbox`
   并且 澄清 Windows 自动模式检查的是 helper 可用性，而不是抽象的 AppContainer 能力
   并且 说明了 `NoSandbox` 会打印无隔离警告，而不是静默降级
@@ -78,11 +82,13 @@ estimate: 1.5d
 
 场景: ShellTool SafePolicy
   测试: review_ch07_safe_policy
+  Level: source-review
+  Targets: ../octos/crates/octos-agent/src/tools/shell.rs, ../octos/crates/octos-agent/src/policy.rs
   当 阅读 SafePolicy 小节
   那么 说明了 `ShellTool::new()` 默认注入 `SafePolicy::default()`
   并且 列出了被拒绝的危险命令模式与需要批准的 ask 模式
   并且 说明了 whitespace 归一化在匹配前的作用
-  并且 说明了 ask 决策在当前非交互执行路径里会直接拒绝
+  并且 说明了 ask 决策没有 `TOOL_APPROVAL_CTX` requester 时会拒绝，有 requester 时会发出 `ToolApprovalRequest`
   并且 明确写出它只捕获常见事故，不是安全边界
 
 场景: 基础设施安全避免漂移数字
