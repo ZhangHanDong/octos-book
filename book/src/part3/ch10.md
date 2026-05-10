@@ -353,15 +353,18 @@ octos-bus 通过 feature flags 按需编译各频道实现。每个频道实现 
 | Telegram | Long polling (teloxide) | 消息编辑、`AtomicBool` 优雅关停 |
 | Discord | WebSocket gateway (serenity) | 消息去重（MessageDedup） |
 | Slack | WebSocket (tokio-tungstenite) | Block Kit 格式支持 |
-| 飞书 | HTTP webhook | 加密消息验证 |
-| WhatsApp | HTTP API | 模板消息 |
+| WhatsApp | Node.js bridge WebSocket | Baileys bridge、独立桥接进程 |
 | Email | IMAP/SMTP (async-imap + lettre) | 异步收发、附件 |
+| 飞书 / Lark | WebSocket / webhook + axum | 加密消息验证、区域化 endpoint |
+| Twilio | Webhook/API (axum) | SMS/MMS/RCS/WhatsApp Business |
+| 企业微信 | HTTP webhook (axum) | 加密消息 |
 | Matrix | HTTP API | AppService 模式、多用户桥接 |
-| 企业微信 | HTTP webhook | 加密消息 |
-| CLI | 终端 stdin/stdout | readline 交互 |
+| WeCom Bot | WebSocket long connection | 群机器人通道 |
+| QQ Bot | WebSocket gateway | Official QQ Bot API v2 |
+| WeChat | WeChat bridge WebSocket | `wechat-bridge` 子进程接入 |
 | API | REST/SSE (axum) | 编程式接入 |
 
-每个频道实现都是独立的——Telegram 频道的 bug 不会影响 Discord，因为它们是不同的代码路径，通过不同的 feature flag 编译。这种隔离设计是 octos-bus 三万余行代码中大部分来自各频道独立实现的原因。
+每个频道实现都是独立的——Telegram 频道的 bug 不会影响 Discord，因为它们是不同的代码路径，通过不同的 feature flag 编译。需要注意的是，`octos chat` 的 CLI readline 不在 `octos-bus` 的 Cargo feature 频道列表中；bus 侧当前 feature-gated 频道以 `api`、`telegram`、`discord`、`slack`、`whatsapp`、`email`、`feishu`、`twilio`、`wecom`、`matrix`、`wecom-bot`、`qq-bot`、`wechat` 为主。这种隔离设计是 octos-bus 三万余行代码中大部分来自各频道独立实现的原因。
 
 ---
 

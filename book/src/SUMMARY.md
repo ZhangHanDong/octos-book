@@ -25,7 +25,7 @@
 
 # 第三部分：平台 — 从单机到多租户
 
-- [第 10 章：octos-bus：14 频道的统一消息抽象](./part3/ch10.md)
+- [第 10 章：octos-bus：多频道消息抽象](./part3/ch10.md)
 - [第 11 章：并发模型：Tokio 异步架构实战](./part3/ch11.md)
 - [第 12 章：octos-pipeline：DOT 图驱动的工作流引擎](./part3/ch12.md)
 - [第 13 章：四种运行模式与配置体系](./part3/ch13.md)

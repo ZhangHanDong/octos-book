@@ -25,7 +25,7 @@
 
 # Part III: Platform — From Single Machine to Multi-Tenant
 
-- [Chapter 10: octos-bus: Unified Message Abstraction for 14 Channels](./part3/ch10.md)
+- [Chapter 10: octos-bus: Multi-Channel Message Abstraction](./part3/ch10.md)
 - [Chapter 11: Concurrency Model: Tokio Async Architecture in Practice](./part3/ch11.md)
 - [Chapter 12: octos-pipeline: DOT Graph-Driven Workflow Engine](./part3/ch12.md)
 - [Chapter 13: Four Runtime Modes and the Configuration System](./part3/ch13.md)
