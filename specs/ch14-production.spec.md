@@ -9,7 +9,7 @@ estimate: 1.5d
 ## 意图
 
 从开发到生产的最后一公里。本章展示 octos 的认证三流（OAuth PKCE/device code/
-paste-token）、Hooks 生命周期系统、Prometheus/SSE/tracing 监控集成、AppUI UI Protocol 控制面、以及多租户配置。
+paste-token）、Hooks 生命周期系统、Prometheus/UI Protocol/harness SSE/tracing 监控集成、AppUI UI Protocol 控制面、以及多租户配置。
 帮助运维和贡献者将 octos 部署到生产环境。当前主分支还引入了 UI Protocol
 capability negotiation、`/api/events/harness` typed SSE、Setup/Admin store
 和 harness event 控制面，本章需要把观测与控制的边界写清楚。
@@ -61,7 +61,7 @@ capability negotiation、`/api/events/harness` typed SSE、Setup/Admin store
   当 阅读监控小节
   那么 说明了 Prometheus 指标端点的暴露方式
   并且 列出了关键指标（请求量、延迟、token 用量等）
-  并且 解释了 SSE 实时事件流与 tracing 分别解决什么观测问题
+  并且 解释了 UI Protocol 进度流、harness typed SSE 与 tracing 分别解决什么观测问题
 
 场景: AppUI UI Protocol 控制面
   测试: review_ch14_ui_protocol
