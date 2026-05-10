@@ -28,8 +28,9 @@
 |---------|------|--------|------|
 | `tools.allow` | string[] | [] | 允许的工具列表（空=全部允许） |
 | `tools.deny` | string[] | [] | 禁止的工具列表（deny-wins） |
-| `tools.byProvider.<name>.allow` | string[] | — | Provider 级允许列表 |
-| `tools.byProvider.<name>.deny` | string[] | — | Provider 级禁止列表 |
+| `tool_policy_by_provider.<name>.allow` | string[] | — | Provider / model 级允许列表，精确 model ID 优先，其次 provider 名 |
+| `tool_policy_by_provider.<name>.deny` | string[] | — | Provider / model 级禁止列表 |
+| `tool_policy_by_provider.<name>.require_tags` | string[] | [] | Provider / model 级标签过滤 |
 
 ## Gateway 配置
 
@@ -90,9 +91,11 @@ Profile 文件位于 `~/.octos/profiles/<id>.json`。当前主分支的 profile 
   "system_prompt": "You are a helpful coding assistant.",
   "max_iterations": 30,
   "tools": {
-    "deny": ["browser"],
-    "byProvider": {
-      "ollama": { "allow": ["read_file", "shell", "grep"] }
+    "deny": ["browser"]
+  },
+  "tool_policy_by_provider": {
+    "ollama": {
+      "allow": ["read_file", "shell", "grep"]
     }
   },
   "gateway": {

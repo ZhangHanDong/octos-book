@@ -167,7 +167,7 @@ octos 采用 Cargo workspace 组织代码。若按主架构口径计算，可以
 依赖第零层和第一层，实现核心运行时逻辑：
 
 - **octos-agent**（34,968 行）：Agent 运行时——这是整个系统的心脏。包含 Agent 主循环、工具注册与执行、命令审批策略、沙箱集成、MCP 客户端、Hook 系统、循环检测、上下文压缩等。依赖 octos-core、octos-llm、octos-memory。
-- **octos-pipeline**（9,137 行）：工作流引擎。基于 Graphviz DOT 语法定义工作流拓扑，支持 5 种 Handler 类型、并行 fan-out、条件分支、Human Gate 和断点续跑。依赖 octos-core、octos-agent、octos-llm、octos-memory。
+- **octos-pipeline**（约 9K 行）：工作流引擎。基于 Graphviz DOT 语法定义工作流拓扑，当前主路径支持 6 种 `HandlerKind`：`Codergen`、`Shell`、`Gate`、`Noop`、`Parallel`、`DynamicParallel`。其中 `Parallel` / `DynamicParallel` 是执行器分支；`Gate` 是条件节点，不是默认接线的人机审批节点。依赖 octos-core、octos-agent、octos-llm、octos-memory。
 
 **第三层：用户入口**
 

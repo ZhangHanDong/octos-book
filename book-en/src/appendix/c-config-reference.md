@@ -28,8 +28,9 @@
 |------------|------|---------|-------------|
 | `tools.allow` | string[] | [] | Allowed tool list; empty means all tools are allowed unless denied |
 | `tools.deny` | string[] | [] | Denied tool list; deny wins |
-| `tools.byProvider.<name>.allow` | string[] | — | Provider-level allow list |
-| `tools.byProvider.<name>.deny` | string[] | — | Provider-level deny list |
+| `tool_policy_by_provider.<name>.allow` | string[] | — | Provider/model-level allow list; exact model ID wins before provider name |
+| `tool_policy_by_provider.<name>.deny` | string[] | — | Provider/model-level deny list |
+| `tool_policy_by_provider.<name>.require_tags` | string[] | [] | Provider/model-level tag filter |
 
 ## Gateway Configuration
 
@@ -94,9 +95,11 @@ Each hook object looks like:
   "system_prompt": "You are a helpful coding assistant.",
   "max_iterations": 30,
   "tools": {
-    "deny": ["browser"],
-    "byProvider": {
-      "ollama": { "allow": ["read_file", "shell", "grep"] }
+    "deny": ["browser"]
+  },
+  "tool_policy_by_provider": {
+    "ollama": {
+      "allow": ["read_file", "shell", "grep"]
     }
   },
   "gateway": {
