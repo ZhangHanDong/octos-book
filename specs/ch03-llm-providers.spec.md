@@ -8,14 +8,16 @@ estimate: 1.5d
 
 ## 意图
 
-octos-llm（约 13000 行）是整个系统与外部 LLM 的桥梁。本章展示如何用 Rust
+octos-llm 是整个系统与外部 LLM 的桥梁。本章展示如何用 Rust
 trait 抽象统一少数专用协议实现和 10+ 种兼容 Provider，以及如何构建三层容错链
-实现生产级可靠性。SSE 流式解析的工程细节对 AI 应用开发者尤其有价值。
+实现生产级可靠性。当前主分支还加入了 provider metadata、HTTP timeout knobs、
+credential pool、content classifier 与 routing decision event；SSE 流式解析的工程细节
+对 AI 应用开发者尤其有价值。
 
 ## 决策
 
 - 源码目录: `crates/octos-llm/src/`
-- 重点文件: `provider.rs`, `retry.rs`, `failover.rs`, `adaptive.rs`, `sse.rs`, `anthropic.rs`, `openai.rs`
+- 重点文件: `provider.rs`, `retry.rs`, `failover.rs`, `adaptive.rs`, `sse.rs`, `credential_pool.rs`, `content_classifier.rs`, `anthropic.rs`, `openai.rs`
 - 图表: 三层容错链流程图、Provider 注册表一览表
 - 工程决策侧栏: `Arc<dyn Trait>` 的选择与 trait object 的代价
 
@@ -23,6 +25,8 @@ trait 抽象统一少数专用协议实现和 10+ 种兼容 Provider，以及如
 
 ### 允许修改
 - octos-book/chapters/ch03-*.md
+- octos-book/book/src/part1/ch03.md
+- octos-book/book-en/src/part1/ch03.md
 - octos-book/assets/ch03-*
 
 ### 禁止做
@@ -41,12 +45,14 @@ trait 抽象统一少数专用协议实现和 10+ 种兼容 Provider，以及如
   当 阅读本章 trait 抽象小节
   那么 展示了 `LlmProvider` trait 的完整签名
   并且 解释了 `chat()` 方法如何统一不同 Provider 的请求/响应格式
+  并且 说明 `provider_metadata` / `provider_metadata_for_index` 用于把实际命中的 provider slot 传给上层观测和成本归因
 
 场景: Provider 注册表完整
   测试: review_ch03_provider_registry
   当 阅读 Provider 注册表小节
   那么 列出了当前注册表中的 15 个 Provider 及其协议/别名/示例模型
   并且 解释了模型名自动检测机制（claude→anthropic, gpt→openai）
+  并且 明确区分 detect_patterns 为空的 Provider 只能通过显式 provider 名或 alias 命中
   并且 说明了专用实现与兼容适配的边界（如 Ollama 复用 OpenAI 兼容层）
 
 场景: 三层容错链逐层讲解
@@ -55,6 +61,8 @@ trait 抽象统一少数专用协议实现和 10+ 种兼容 Provider，以及如
   那么 分别解释了 RetryProvider、ProviderChain、AdaptiveRouter 的职责
   并且 包含 Mermaid 流程图展示请求在三层间的流转
   并且 AdaptiveRouter 部分包含 EMA 评分和 circuit breaker 机制
+  并且 说明 credential pool 如何接收 429/auth failure 并执行 cooldown/refresh
+  并且 说明 content classifier 如何产生 `routing.decision` harness event 并影响模型 tier
 
 场景: SSE 流式解析工程细节
   测试: review_ch03_sse_parsing
