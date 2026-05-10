@@ -2,7 +2,7 @@
 
 > **定位**：本章是全书开篇，回答一个根本问题——为什么要用 Rust 构建多租户 AI Agent 平台？前置依赖：无。适用场景：任何想理解 octos 项目存在理由的读者，无论你是 Rust 初学者（读者 A）、资深 Rust 开发者（读者 B）、还是来自 Python/Go 生态的 AI 应用开发者（读者 C）。
 
-当你第一次打开 octos 的代码仓库，看到接近 28 万行 Rust、400+ 个 Rust 源文件，以及一个由 11 个 octos-* 核心 crate、14 个 app skill、1 个 platform skill 组成的 Cargo workspace，心中难免浮现一个问题：为什么不用 Python？LangChain 和 AutoGen 不是已经很成熟了吗？为什么不用 Go？它的并发模型不是更简单吗？
+当你第一次打开 octos 的代码仓库，看到 26 万多行 Rust 源文件、400+ 个 Rust 文件，以及一个由 11 个 octos-* 核心 crate、14 个 app skill、1 个 platform skill 组成的 Cargo workspace，心中难免浮现一个问题：为什么不用 Python？LangChain 和 AutoGen 不是已经很成熟了吗？为什么不用 Go？它的并发模型不是更简单吗？
 
 这不是一个关于语言偏好的问题。当你把「AI Agent」从单用户玩具推向多租户生产平台时，你面对的是一组相互纠缠的工程约束：安全隔离、并发控制、性能预算。这三个约束中的任何一个都不难单独解决，但当它们同时出现在一个系统中时，语言选型就不再是品味问题，而是架构决策。
 
