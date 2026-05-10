@@ -25,6 +25,8 @@ capability negotiation、`/api/events/harness` typed SSE、Setup/Admin store
 
 ### 允许修改
 - octos-book/chapters/ch14-*.md
+- octos-book/book/src/part3/ch14.md
+- octos-book/book-en/src/part3/ch14.md
 - octos-book/assets/ch14-*
 
 ### 禁止做
@@ -48,7 +50,8 @@ capability negotiation、`/api/events/harness` typed SSE、Setup/Admin store
 场景: Hooks 生命周期完整
   测试: review_ch14_hooks
   当 阅读 Hooks 小节
-  那么 列出了 4 个事件（before/after × tool_call/llm_call）
+  那么 列出了核心 4 个事件（before/after × tool_call/llm_call）
+  并且 说明当前源码还包含 resume/turn/spawn lifecycle 事件，避免把 HookEvent 写成只有 4 种
   并且 解释了 shell 协议（stdin JSON + exit code 语义）
   并且 说明了熔断器（3 次失败自动禁用）和可配置阈值
   并且 解释了 argv 数组执行（无 shell 解释）的安全意义
