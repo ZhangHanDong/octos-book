@@ -21,6 +21,8 @@ estimate: 0.5d
 
 ### 允许修改
 - octos-book/chapters/appendix-c-*.md
+- octos-book/book/src/appendix/c-config-reference.md
+- octos-book/book-en/src/appendix/c-config-reference.md
 
 ### 禁止做
 - 不编造不存在的配置字段
@@ -46,4 +48,4 @@ estimate: 0.5d
   测试: review_appendix_c_example
   当 检查示例配置
   那么 提供了一个完整的 `config.json` 示例
-  并且 示例中每个字段有行内注释
+  并且 示例使用 JSONC 风格注释说明每个主要字段
