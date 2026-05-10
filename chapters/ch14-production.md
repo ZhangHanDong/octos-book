@@ -507,7 +507,7 @@ flowchart TD
 
 1. **认证三流**：OpenAI 支持 OAuth PKCE（浏览器环境）和 Device Code（无浏览器）；其他 Provider 当前主要走 Paste-token。凭据写入 `~/.octos/auth.json`，Serve 主路由对 admin/test token 使用常量时间比较。
 2. **Hooks**：核心 tool/LLM 事件加 resume/turn/spawn 生命周期事件，共用 Shell 协议（argv 执行、stdin JSON、exit code 决策）。Circuit breaker 默认 3 次失败自动禁用。敏感参数自动脱敏。
-3. **监控**：Prometheus 指标 + 结构化日志 + SSE 事件流；其中 token 指标当前更适合趋势监控，不是精确计费真值。`/api/events/harness` 进一步提供 task / sub-agent / swarm 的 typed event stream。
+3. **监控**：Prometheus 指标 + 结构化日志 + UI Protocol 进度流 + `/api/events/harness` typed SSE 覆盖不同观测需求；其中 token 指标当前更适合趋势监控，不是精确计费真值。
 4. **AppUI 控制面**：UI Protocol WebSocket 通过 `SessionOpened.capabilities` 和方法级 capability gate，把后台任务、审批和 diff 操作纳入结构化控制面。
 5. **多租户**：Profile/Account、User、Session 分层隔离；子账号继承父账号结构化能力契约，但不继承 customer-installed skills；是否进程级隔离取决于 process-manager 还是 standalone Gateway 入口。
 6. **生产控制面**：admin token、setup state、SMTP secret、profile config 和 gateway/serve/process manager 共同构成部署后的运维入口；敏感 secret 应走专用 store，而不是散落在日志或临时环境变量中。

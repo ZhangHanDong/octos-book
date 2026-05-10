@@ -352,7 +352,7 @@ report -> refine [condition="outcome.contains(\"missing data\")"]
 - 可按名称、路径或内联 DOT 解析 pipeline；搜索路径包括项目级 `.octos/pipelines`、用户级 `data_dir/pipelines`、`data_dir/skills`，额外还能挂 `octos_home/skills`（`../octos/crates/octos-pipeline/src/discovery.rs:14-114`、`../octos/crates/octos-pipeline/src/tool.rs:127-132`）
 - 对整个 pipeline 施加 60-1800 秒的总超时钳制；结束后会置位共享 shutdown flag，通知所有 worker 停止（`../octos/crates/octos-pipeline/src/tool.rs:349-368`）
 - 如果 pipeline 没产出 markdown 文件但有文本输出，工具会合成一个临时 `.md` 报告，保证 `spawn_only` 交付路径有可发送文件（`../octos/crates/octos-pipeline/src/tool.rs:386-443`）
-- `node_costs` 会投射到 `ToolResult.structured_metadata`，供 session actor 把 per-node cost 带回 SSE `done` 事件（`../octos/crates/octos-pipeline/src/tool.rs:444-479`）
+- `node_costs` 会投射到 `ToolResult.structured_metadata`，供 session actor 把 per-node cost 带回 UI/API completion metadata（`../octos/crates/octos-pipeline/src/tool.rs:444-479`）
 
 这里还有一个值得写进书里的“实现与提示词分离”现象：`run_pipeline` 的 `input_schema()` 会明确告诉模型“不要显式写 `model=`，系统会自动选择模型”（`../octos/crates/octos-pipeline/src/tool.rs:249-285`），但运行时引擎本身依然支持 `default_model` / `node.model`。也就是说：
 

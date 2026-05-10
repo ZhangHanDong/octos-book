@@ -48,7 +48,7 @@ pub struct ToolResult {
 
 **集成部分** 由四个扩展点承载：`execute_with_context()` 让迁移后的工具读取 `ToolContext`，而不破坏旧的 `execute()` 签名；`tags()` 为工具打能力标签；`as_any()` 允许框架在极少数情况下向下转型访问具体工具，例如 `activate_tools` 需要在 Agent 构造完成后注入 `ToolRegistry` 回指（`../octos/crates/octos-agent/src/agent/mod.rs:384-394`）；`concurrency_class()` 则把工具标记为 `Safe` 或 `Exclusive`，供批量执行器决定并发还是串行。
 
-`structured_metadata` 是另一个近期新增的宿主侧通道。它不会改变传统的文本输出，但允许 `run_pipeline` 这类工具把 per-node cost rows 带回 session actor，再由 SSE `done` 事件交给 UI 成本面板渲染（`../octos/crates/octos-agent/src/tools/mod.rs:392-415`）。
+`structured_metadata` 是另一个近期新增的宿主侧通道。它不会改变传统的文本输出，但允许 `run_pipeline` 这类工具把 per-node cost rows 带回 session actor，再通过 UI/API completion metadata 交给成本面板渲染（`../octos/crates/octos-agent/src/tools/mod.rs:392-415`）。
 
 `tags()` 不只是"分类标签"。当前源码里它至少影响两层过滤：
 
