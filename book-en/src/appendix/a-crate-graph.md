@@ -1,70 +1,89 @@
-# 附录 A：octos 完整 Crate 依赖图
+# Appendix A: Complete octos Crate Dependency Graph
 
-## 内部 Crate 依赖拓扑
+This appendix reflects the current `../octos` main branch and uses the workspace `Cargo.toml` files as the source of truth. The graph expands the 11 `octos-*` core crates. `app-skills` and `platform-skills` are also workspace members, but they are capability binaries rather than core library crates, so they are not expanded in the core dependency graph.
+
+## Internal Crate Dependency Topology
 
 ```mermaid
 graph BT
-    subgraph "独立 Crate"
+    subgraph "Independent Infrastructure"
         core["octos-core"]
         plugin["octos-plugin"]
         sandbox["octos-sandbox"]
     end
 
-    subgraph "领域服务"
+    subgraph "Domain Services"
         llm["octos-llm"]
         memory["octos-memory"]
         bus["octos-bus"]
     end
 
-    subgraph "运行时引擎"
+    subgraph "Runtime Engines"
         agent["octos-agent"]
         pipeline["octos-pipeline"]
+        swarm["octos-swarm"]
+        dora["octos-dora-mcp"]
     end
 
-    subgraph "用户入口"
+    subgraph "User Entry Point"
         cli["octos-cli"]
     end
 
     llm --> core
     memory --> core
     bus --> core
+
     agent --> core
-    agent --> llm
+    agent --> bus
     agent --> memory
+    agent --> llm
+    agent --> plugin
+
     pipeline --> core
     pipeline --> agent
     pipeline --> llm
     pipeline --> memory
+
+    swarm --> agent
+    dora --> agent
+
     cli --> core
     cli --> agent
-    cli --> llm
     cli --> memory
-    cli --> pipeline
+    cli --> llm
     cli --> bus
+    cli --> pipeline
+    cli --> swarm
 ```
 
-## 各 Crate 关键外部依赖
+Arrow direction means "depends on." For example, `cli --> agent` means `octos-cli` depends on `octos-agent` in its `Cargo.toml`. `octos-sandbox` is a Windows AppContainer helper crate and is not directly depended on by other core crates today.
 
-| Crate | 关键依赖 | 版本 | 用途 |
-|-------|---------|------|------|
-| **octos-core** | serde, serde_json, chrono, uuid, eyre | 1.x, 1.x, 0.4, 1.x, 0.6 | 序列化、时间、ID、错误 |
-| **octos-llm** | reqwest, async-trait, futures, hnsw_rs | 0.12, 0.1, 0.3, 0.3 | HTTP、异步 trait、流、向量索引 |
-| **octos-memory** | redb, bincode, hnsw_rs | 2.x, 1.x, 0.3 | 嵌入式 DB、序列化、向量搜索 |
-| **octos-agent** | tokio, lru, libc, glob, regex | 1.x, 0.16, 0.2, 0.3, 1.x | 异步运行时、缓存、系统调用、文件搜索 |
-| **octos-bus** | teloxide*, serenity*, tokio-tungstenite* | 0.17, 0.12, 0.26 | Telegram/Discord/WebSocket（*feature-gated） |
-| **octos-cli** | clap, axum*, tower-http*, rustyline | 4.x, 0.8, 0.6, 15.x | CLI 解析、Web 服务、readline |
-| **octos-pipeline** | 继承自 octos-agent 依赖 | — | 无独立重依赖 |
-| **octos-plugin** | serde, serde_json, eyre, which | 1.x, 1.x, 0.6, 7.x | 序列化、错误、可执行文件发现 |
-| **octos-sandbox** | clap, eyre | 4.x, 0.6 | CLI 解析、错误（仅 Windows） |
+## Key External Dependencies by Crate
 
-*标注 `*` 的依赖通过 feature flags 按需引入。*
+| Crate | Key Dependencies | Version | Purpose |
+|-------|------------------|---------|---------|
+| **octos-core** | serde, serde_json, chrono, uuid, eyre | 1.x, 1.x, 0.4, 1.x, 0.6 | Serialization, time, IDs, errors |
+| **octos-llm** | reqwest, async-trait, futures, secrecy, redb, metrics | 0.12, 0.1, 0.3, 0.10, 2.x, 0.24 | HTTP, async traits, streaming, secrets, credential pool state, metrics |
+| **octos-memory** | redb, hnsw_rs, bincode, tokio, uuid | 2.x, 0.3, 1.x, 1.x, 1.x | Embedded DB, vector search, serialization, async, IDs |
+| **octos-bus** | tokio, lru, cron, subtle, aes/cbc, teloxide*, serenity*, axum* | 1.x, 0.16, 0.15, 2.x, 0.8/0.1, 0.17, 0.12, 0.8 | Async, cache, scheduling, constant-time compare, crypto, channel/API integrations |
+| **octos-agent** | tokio, async-trait, reqwest, chromiumoxide, gix*, tree-sitter* | 1.x, 0.1, 0.12, 0.9, 0.79, 0.24 | Agent async runtime, tool HTTP, browser automation, Git/AST features |
+| **octos-pipeline** | async-trait, tokio, futures, regex, glob | 0.1, 1.x, 0.3, 1.x, 0.3 | Handler abstraction, async execution, concurrency, pattern matching, file matching |
+| **octos-swarm** | async-trait, redb, uuid, metrics, tokio | 0.1, 2.x, 1.x, 0.24, 1.x | Sub-agent orchestration, persistence, IDs, metrics, async |
+| **octos-dora-mcp** | async-trait, tokio, serde, serde_json, eyre | 0.1, 1.x, 1.x, 1.x, 0.6 | Dora/MCP bridge, async, serialization, errors |
+| **octos-cli** | clap, rustyline, axum*, tower-http*, rust-embed*, keyring, metrics-exporter-prometheus* | 4.x, 15.x, 0.8, 0.6, 8.x, 3.x, 0.16 | CLI, interactive input, Web/API, static assets, system credentials, Prometheus |
+| **octos-plugin** | serde, serde_json, eyre, which, tokio, metrics | 1.x, 1.x, 0.6, 7.x, 1.x, 0.24 | Manifest parsing, errors, executable discovery, async, metrics |
+| **octos-sandbox** | clap, eyre, rappct**, windows** | 4.x, 0.6, 0.13, 0.62 | CLI, errors, Windows AppContainer |
 
-## Workspace 共享依赖
+`*` marks feature-gated dependencies; `**` marks Windows-target-only dependencies.
 
-以下依赖在 `[workspace.dependencies]` 中统一定义，所有 crate 使用相同版本：
+## Workspace Shared Dependencies
 
-- **tokio 1.x**（full features）：异步运行时
-- **serde 1.x**（derive）：序列化框架
-- **eyre 0.6 / color-eyre 0.6**：错误处理
-- **tracing 0.1 / tracing-subscriber 0.3**：结构化日志
-- **reqwest 0.12**（rustls-tls）：HTTP 客户端（纯 Rust TLS）
+These dependencies are centralized in `[workspace.dependencies]`, so crates using workspace dependencies share the same versions:
+
+- **tokio 1.x** (full features): async runtime
+- **serde 1.x** (derive) / **serde_json 1.x**: serialization
+- **eyre 0.6 / color-eyre 0.6**: error handling
+- **tracing 0.1 / tracing-subscriber 0.3**: structured logging
+- **reqwest 0.12** (rustls-tls): HTTP client with pure Rust TLS
+- **redb 2.x**: embedded persistence
+- **axum 0.8 / tower-http 0.6**: optional Web/API entry points
