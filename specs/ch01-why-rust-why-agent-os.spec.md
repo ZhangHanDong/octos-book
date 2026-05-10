@@ -10,19 +10,21 @@ estimate: 1d
 
 作为全书开篇，阐明 octos 项目存在的理由：多租户 AI Agent 平台面临安全隔离、
 并发、性能三大挑战，以及为什么 Rust 是解决这些挑战的最佳选择。引导读者理解
-10 crate workspace 的分层拓扑，为后续章节建立全局地图。
+当前 workspace 的分层拓扑，为后续章节建立全局地图。
 
 ## 决策
 
 - 源码入口: `Cargo.toml`（workspace 定义）、各 crate 的 `Cargo.toml`
 - 对比维度: Python(langchain/autogen) vs Go vs Rust — 安全、并发、性能、生态
-- 架构图: 10 crate 依赖拓扑 Mermaid 图
+- 架构图: 11 个 octos-* crate 依赖拓扑 Mermaid 图，并说明 app/platform skills 是 workspace 成员但不属于核心库分层
 - 工程决策侧栏: mono-repo vs multi-repo
 
 ## 边界
 
 ### 允许修改
 - octos-book/chapters/ch01-*.md
+- octos-book/book/src/part1/ch01.md
+- octos-book/book-en/src/part1/ch01.md
 - octos-book/assets/ch01-*
 
 ### 禁止做
@@ -54,7 +56,8 @@ estimate: 1d
   测试: review_ch01_workspace_topology
   假设 读者首次接触 octos 代码库
   当 阅读本章「Workspace 策略」小节
-  那么 能说出 10 个 crate 的名称和一句话职责描述
+  那么 能说出 11 个 octos-* crate 的名称和一句话职责描述
+  并且 能区分 app-skills / platform-skills 是能力二进制程序而非核心库 crate
   并且 理解它们之间的依赖方向（上层依赖下层）
 
 场景: 架构图准确
