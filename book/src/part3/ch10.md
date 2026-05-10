@@ -1,6 +1,6 @@
 # 第 10 章：octos-bus：消息总线、频道抽象与会话持久化
 
-> **定位**：本章深入 octos-bus crate（当前 `../octos/crates/octos-bus/src/` 约 31K 行），展示如何用 `Channel` trait 抽象统一多种消息频道，以及会话管理、消息分片、thread-bound streaming、durable commit observer 和 child-session contract 的工程实现。前置依赖：第 5 章。适用场景：想理解多频道消息平台架构的开发者（读者 B），以及需要接入新频道的贡献者（读者 D）。
+> **定位**：本章深入 octos-bus crate（当前 `../octos/crates/octos-bus/` 约 30K 行 Rust 源文件），展示如何用 `Channel` trait 抽象统一多种消息频道，以及会话管理、消息分片、thread-bound streaming、durable commit observer 和 child-session contract 的工程实现。前置依赖：第 5 章。适用场景：想理解多频道消息平台架构的开发者（读者 B），以及需要接入新频道的贡献者（读者 D）。
 
 当 Agent 从单用户 CLI 走向多用户平台时，消息接入层的复杂度急剧上升。Telegram 的消息长度限制是 4,000 字符，Discord 是 1,900；Slack 用 Block Kit 格式化消息，飞书用 Rich Text；邮件是异步的，WhatsApp 需要模板消息。octos-bus 用一个 `Channel` trait 统一了这些差异。
 
@@ -58,11 +58,11 @@ pub trait Channel: Send + Sync {
 - `finish_stream_bound(chat_id, message_id, content, thread_id)`
 - `send_raw_sse_bound(chat_id, json, thread_id)`
 
-这些方法的核心不是多传一个字段，而是在并发 Web turn 下把每个流式增量、最终消息和 raw SSE 事件都显式绑定到 originating `thread_id`（`../octos/crates/octos-bus/src/channel.rs:95-200`）。旧路径会从 message id 解码或从 per-chat sticky map 里恢复 thread；当同一个 chat 连续快速发起多个 turn 时，sticky map 可能已经被后一个 turn 旋转，导致前一个 turn 的 late delta 被写进后一个气泡。bound API 的语义是：**调用方已经知道这个增量属于哪个 turn，就不要再从共享状态里猜。**
+这些方法的核心不是多传一个字段，而是在并发 Web turn 下把每个流式增量、最终消息和历史 raw SSE 事件都显式绑定到 originating `thread_id`（`../octos/crates/octos-bus/src/channel.rs:95-200`）。旧路径会从 message id 解码或从 per-chat sticky map 里恢复 thread；当同一个 chat 连续快速发起多个 turn 时，sticky map 可能已经被后一个 turn 旋转，导致前一个 turn 的 late delta 被写进后一个气泡。bound API 的语义是：**调用方已经知道这个增量属于哪个 turn，就不要再从共享状态里猜。**
 
 ```mermaid
 sequenceDiagram
-    participant Turn as AppUI turn
+    participant Turn as Web/API turn
     participant Reporter as Stream forwarder
     participant Channel as Channel bound API
     participant UI as Client thread bubble
@@ -72,7 +72,7 @@ sequenceDiagram
     Channel->>UI: update exact thread bubble
 ```
 
-默认实现仍会退回旧的 `edit_message()` / `send_raw_sse()`，所以 Telegram、Discord 等不关心 thread 的频道保持兼容；API/SSE 频道则可以覆盖 bound 方法，把所有事件稳定落到正确的 AppUI thread。`health_check()` 也是同一轮演进的一部分：它让 admin dashboard 可以以统一方式展示频道健康状态，而不是把健康探测散落到每个频道自己的管理接口里（`../octos/crates/octos-bus/src/channel.rs:241-262`）。
+默认实现仍会退回旧的 `edit_message()` / `send_raw_sse()`，所以 Telegram、Discord 等不关心 thread 的频道保持兼容；历史 API channel 可以覆盖 bound 方法，把事件稳定落到正确的 UI thread。这里需要和第 13、14 章区分：当前 Serve/AppUI 的公开 chat transport 已经迁到 `/api/ui-protocol/ws`，`send_raw_sse_bound()` 是 bus trait 中保留的兼容/内部扩展点，不代表新客户端还应该使用 chat SSE。`health_check()` 也是同一轮演进的一部分：它让 admin dashboard 可以以统一方式展示频道健康状态，而不是把健康探测散落到每个频道自己的管理接口里（`../octos/crates/octos-bus/src/channel.rs:241-262`）。
 
 ### 10.1.3 AgentHandle 对称设计
 
@@ -362,9 +362,9 @@ octos-bus 通过 feature flags 按需编译各频道实现。每个频道实现 
 | WeCom Bot | WebSocket long connection | 群机器人通道 |
 | QQ Bot | WebSocket gateway | Official QQ Bot API v2 |
 | WeChat | WeChat bridge WebSocket | `wechat-bridge` 子进程接入 |
-| API | REST/SSE (axum) | 编程式接入 |
+| API | REST / UI Protocol WebSocket / 兼容事件 hook (axum) | 编程式接入与 AppUI 控制面 |
 
-每个频道实现都是独立的——Telegram 频道的 bug 不会影响 Discord，因为它们是不同的代码路径，通过不同的 feature flag 编译。需要注意的是，`octos chat` 的 CLI readline 不在 `octos-bus` 的 Cargo feature 频道列表中；bus 侧当前 feature-gated 频道以 `api`、`telegram`、`discord`、`slack`、`whatsapp`、`email`、`feishu`、`twilio`、`wecom`、`matrix`、`wecom-bot`、`qq-bot`、`wechat` 为主。这种隔离设计是 octos-bus 三万余行代码中大部分来自各频道独立实现的原因。
+每个频道实现都是独立的——Telegram 频道的 bug 不会影响 Discord，因为它们是不同的代码路径，通过不同的 feature flag 编译。需要注意的是，`octos chat` 的 CLI readline 不在 `octos-bus` 的 Cargo feature 频道列表中；bus 侧当前 feature-gated 频道以 `api`、`telegram`、`discord`、`slack`、`whatsapp`、`email`、`feishu`、`twilio`、`wecom`、`matrix`、`wecom-bot`、`qq-bot`、`wechat` 为主。这种隔离设计是 octos-bus 约 30K 行 Rust 源文件中大部分来自各频道独立实现的原因。
 
 ---
 
