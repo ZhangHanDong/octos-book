@@ -8,7 +8,7 @@ estimate: 1.5d
 
 ## 意图
 
-octos-agent 是整个系统的心脏（约 32000 行）。本章聚焦 `agent.rs` 的核心循环，
+octos-agent 是整个系统的心脏。本章聚焦 `agent/loop_runner.rs` 的核心循环，
 逐段走读从消息构建到工具调用再到返回结果的完整流程。这是全书最核心的一章，
 读者理解了 Agent Loop 就理解了 octos 的灵魂。当前主分支还引入了
 `HarnessError`、`LoopRetryState`、持久化 retry bucket 和 `CompactAndRetry`
@@ -27,6 +27,8 @@ state machine 的工程叙事。
 
 ### 允许修改
 - octos-book/chapters/ch05-*.md
+- octos-book/book/src/part2/ch05.md
+- octos-book/book-en/src/part2/ch05.md
 - octos-book/assets/ch05-*
 
 ### 禁止做
@@ -44,7 +46,7 @@ state machine 的工程叙事。
 场景: 主循环完整呈现
   测试: review_ch05_main_loop
   当 阅读主循环小节
-  那么 包含 `agent.rs` 核心循环的实际代码片段（标注行号）
+  那么 包含 `loop_runner.rs` 核心循环的实际代码片段（标注行号）
   并且 逐段解释每个阶段：消息构建→LLM 调用→流式消费→决策
 
 场景: stop_reason 决策树清晰
@@ -57,13 +59,16 @@ state machine 的工程叙事。
   测试: review_ch05_budget
   当 阅读预算管理小节
   那么 解释了 50 次迭代上限（`max_iterations`）的配置和触发条件
+  并且 说明 `max_timeout` 是 activity timeout 而不是无条件 wall-clock kill
+  并且 说明 idle progress timeout 的 300s 无进展保护
   并且 说明了 token 预算的计算与耗尽处理
 
 场景: 循环检测机制
   测试: review_ch05_loop_detect
   当 阅读循环检测小节
   那么 解释了 `loop_detect.rs` 如何识别 Agent 重复行为
-  并且 说明了检测到循环后的处理策略
+  并且 说明当前 `process_message` 检测到循环后不会继续执行同一批工具
+  并且 说明 shell spiral 会先尝试通过 retry ledger 返回最近 shell 输出，否则返回去重后的 terminal warning
 
 场景: 源码走读有教学价值
   测试: review_ch05_code_walkthrough

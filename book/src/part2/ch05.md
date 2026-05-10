@@ -1,10 +1,10 @@
 # 第 5 章：Agent Loop：一次对话的完整生命周期
 
-> **定位**：本章是全书最核心的一章——深入 octos-agent 的配置与主循环（`crates/octos-agent/src/agent/mod.rs` + `crates/octos-agent/src/agent/loop_runner.rs`），逐段走读从消息构建到工具调用再到返回结果的完整流程。前置依赖：第 3 章（LLM Provider）、第 4 章（记忆系统）。适用场景：任何想理解 AI Agent 运行时机制的读者，尤其是 AI 应用开发者（读者 C）和想贡献 octos 核心代码的开发者（读者 D）。
+> **定位**：本章是全书最核心的一章——深入 octos-agent 的配置与主循环（`crates/octos-agent/src/agent/mod.rs` + `crates/octos-agent/src/agent/loop_runner.rs`），逐段走读从消息构建到工具调用、上下文压缩、错误恢复再到返回结果的完整流程。前置依赖：第 3 章（LLM Provider）、第 4 章（记忆系统）。适用场景：任何想理解 AI Agent 运行时机制的读者，尤其是 AI 应用开发者（读者 C）和想贡献 octos 核心代码的开发者（读者 D）。
 
 理解了 octos-core 的类型系统（第 2 章）、octos-llm 的 Provider 抽象（第 3 章）和 octos-memory 的记忆系统（第 4 章）之后，我们终于来到了整个系统的心脏——Agent Loop。
 
-一个 AI Agent 的"智能"本质上是一个循环：接收用户消息 → 调用 LLM → 解析 LLM 的意图 → 如果 LLM 想用工具就执行工具 → 把工具结果反馈给 LLM → 重复，直到 LLM 认为任务完成。这个循环看似简单，但生产级实现需要处理大量边界情况：迭代上限、token 预算、上下文窗口溢出、消息格式修复、循环检测、优雅关停。
+一个 AI Agent 的"智能"本质上是一个循环：接收用户消息 → 调用 LLM → 解析 LLM 的意图 → 如果 LLM 想用工具就执行工具 → 把工具结果反馈给 LLM → 重复，直到 LLM 认为任务完成。这个循环看似简单，但生产级实现需要处理大量边界情况：迭代上限、token 预算、idle progress timeout、上下文窗口溢出、消息格式修复、循环检测、优雅关停、provider/harness 错误恢复。
 
 本章将走读 `crates/octos-agent/src/agent/` 目录下的核心代码，用约 200 行关键代码展示 Agent Loop 的完整生命周期。
 
@@ -14,7 +14,7 @@
 
 ### 5.1.1 Agent 的组成
 
-Agent 结构体（`crates/octos-agent/src/agent/mod.rs:115-138`）持有执行一次对话所需的全部资源：
+Agent 结构体（`crates/octos-agent/src/agent/mod.rs:143-230`）持有执行一次对话所需的全部资源：
 
 ```rust
 pub struct Agent {
@@ -22,36 +22,46 @@ pub struct Agent {
     pub llm: Arc<dyn LlmProvider>,                // LLM Provider（详见第 3 章）
     pub tools: Arc<ToolRegistry>,                 // 工具注册表（详见第 6 章）
     pub memory: Arc<EpisodeStore>,                // 长期记忆（详见第 4 章）
+    pub embedder: Option<Arc<dyn EmbeddingProvider>>,
     pub system_prompt: RwLock<String>,            // 系统提示（支持热加载）
     pub config: AgentConfig,                      // 执行配置
     pub reporter: RwLock<Arc<dyn ProgressReporter>>, // 进度上报
     pub hooks: Option<Arc<HookExecutor>>,         // 钩子系统（详见第 14 章）
+    pub harness_event_sink: Option<String>,
     pub shutdown: Arc<AtomicBool>,                // 优雅关停标志
+    pub persistent_retry_state: Option<Arc<Mutex<LoopRetryState>>>,
+    pub tiered_compaction: Option<Arc<TieredCompactionRunner>>,
+    pub file_state_cache: Option<Arc<FileStateCache>>,
+    pub profile: Option<Arc<ProfileDefinition>>,
     // ...
 }
 ```
 
 几个设计要点值得注意：`llm` 和 `tools` 使用 `Arc` 包装，因为 Agent 可能在多个异步任务间共享（工具并行执行时）。`system_prompt` 使用 `RwLock<String>` 而非普通 `String`，支持配置热加载（详见第 13 章）——运行中的 Agent 可以在不重启的情况下更新系统提示。`shutdown: Arc<AtomicBool>` 是一个跨线程共享的原子布尔标志。当收到 SIGTERM 信号时，主线程将其设为 `true`，Agent Loop 在每次迭代开始时检查这个标志，如果为 `true` 就优雅退出而非粗暴终止（详见第 11 章）。
 
+当前主分支的 Agent 还显式携带几类运行时状态：`persistent_retry_state` 保存跨 turn 的 retry bucket，`tiered_compaction` 驱动三层上下文压缩，`file_state_cache` 让文件工具读写可以共享缓存，`profile` 记录启动时应用的 profile envelope。这些字段说明 Agent 已经不是“LLM + tools”的薄包装，而是一个把 prompt-visible state、runtime control state 和 durable evidence state 连接起来的运行时对象。
+
 ### 5.1.2 AgentConfig
 
-AgentConfig（`crates/octos-agent/src/agent/mod.rs:36-75`）控制 Agent 的执行边界：
+AgentConfig（`crates/octos-agent/src/agent/mod.rs:45-94`）控制 Agent 的执行边界：
 
 | 字段 | 默认值 | 含义 |
 |------|--------|------|
 | `max_iterations` | 50 | 最大迭代次数 |
 | `max_tokens` | None（无限制） | token 预算上限 |
-| `max_timeout` | 600 秒（10 分钟） | 墙钟超时 |
-| `tool_timeout_secs` | 600 | 单个工具调用超时 |
+| `max_timeout` | 1800 秒（30 分钟） | activity timeout：只有在没有近期进展时才触发 |
+| `tool_timeout_secs` | 1800 | 单个工具调用默认超时，上限同为 1800 秒 |
 | `save_episodes` | true | 是否保存经验到记忆 |
+| `chat_max_tokens` | None | 单次 LLM 输出 token override |
+| `suppress_auto_send_files` | false | 背景 worker 是否跳过通用 files_to_send 自动发送 |
 
-50 次迭代上限（`crates/octos-agent/src/agent/mod.rs:64-68`）是一个安全阀。一个典型的代码修改任务通常在 5-15 次迭代内完成（读文件 → 分析 → 修改 → 测试）。如果 Agent 在 50 次迭代后仍未完成，几乎可以确定它陷入了某种低效循环。
+50 次迭代上限（`crates/octos-agent/src/agent/mod.rs:82-94`）是一个安全阀。一个典型的代码修改任务通常在 5-15 次迭代内完成（读文件 → 分析 → 修改 → 测试）。如果 Agent 在 50 次迭代后仍未完成，几乎可以确定它陷入了某种低效循环。
 
 ---
 
 ## 5.2 主循环：逐段走读
 
-主循环位于 `crates/octos-agent/src/agent/loop_runner.rs:108-290`。让我们逐段走读。
+主循环位于 `crates/octos-agent/src/agent/loop_runner.rs:578-1057`（对话模式）和 `loop_runner.rs:1060-1325`（任务模式）。让我们逐段走读。
 
 ### 5.2.1 入口点
 
@@ -68,12 +78,13 @@ Agent 有两个入口点（`crates/octos-agent/src/agent/loop_runner.rs:33-41,29
 
 ```mermaid
 flowchart TD
-    Start["迭代开始"] --> Budget["预算检查<br/>iterations/tokens/timeout/shutdown"]
+    Start["迭代开始"] --> Budget["预算检查<br/>iterations/tokens/activity/idle/shutdown"]
     Budget -->|"超出预算"| Return["返回当前结果"]
     Budget -->|"通过"| Iter["iteration++<br/>上报 thinking 状态"]
     Iter --> LRU["工具 LRU 管理<br/>tick + 自动淘汰"]
-    LRU --> Repair["消息修复管线<br/>6 道修复"]
-    Repair --> LLM["调用 LLM<br/>（带 hooks）"]
+    LRU --> Compact["Tiered compaction<br/>preflight + tier1 + tier2"]
+    Compact --> Repair["消息修复管线<br/>7 类 repair reason"]
+    Repair --> LLM["调用 LLM<br/>（带 hooks + context_management）"]
     LLM --> Stream["流式消费<br/>累积 tokens"]
     Stream --> Stop{"stop_reason?"}
     Stop -->|"EndTurn"| EndReturn["返回响应"]
@@ -88,7 +99,7 @@ flowchart TD
 
 ### 5.2.3 预算检查
 
-每次迭代最先执行的是预算检查（`crates/octos-agent/src/agent/budget.rs:34-64`）：
+每次迭代最先执行的是预算检查（`crates/octos-agent/src/agent/budget.rs:42-80`）：
 
 ```rust
 pub(super) fn check_budget(
@@ -96,6 +107,7 @@ pub(super) fn check_budget(
     iteration: u32,
     start: Instant,
     total_usage: &TokenUsage,
+    activity: &LoopActivityState,
 ) -> Option<BudgetStop> {
     // 1. 优雅关停——原子读取，O(1)
     if self.shutdown.load(Ordering::Acquire) {
@@ -105,13 +117,17 @@ pub(super) fn check_budget(
     if iteration >= self.config.max_iterations {
         return Some(BudgetStop::MaxIterations);
     }
-    // 3. 墙钟超时——elapsed() 调用
+    // 3. idle progress timeout——无可观察进展
+    if activity.has_timed_out(idle_timeout) {
+        return Some(BudgetStop::IdleProgressTimeout { limit: idle_timeout });
+    }
+    // 4. activity timeout——只有没有近期进展时才触发
     if let Some(timeout) = self.config.max_timeout {
-        if start.elapsed() > timeout {
-            return Some(BudgetStop::WallClockTimeout { limit: timeout });
+        if start.elapsed() > timeout && !activity.recently_active_within(timeout) {
+            return Some(BudgetStop::ActivityTimeout { limit: timeout });
         }
     }
-    // 4. token 预算——需要加法
+    // 5. token 预算——需要加法
     if let Some(max_tokens) = self.config.max_tokens {
         let used = total_usage.input_tokens + total_usage.output_tokens;
         if used >= max_tokens {
@@ -122,12 +138,13 @@ pub(super) fn check_budget(
 }
 ```
 
-四道检查的优先级经过精心排序：
+五道检查的优先级经过精心排序：
 
 1. **Shutdown** 最先——原子加载是 ~1 CPU 周期的操作，且用户主动中断必须立即响应
 2. **迭代次数**次之——简单整数比较，是最常见的停止原因
-3. **墙钟超时**第三——`Instant::elapsed()` 涉及系统调用，但仍然很快
-4. **Token 预算**最后——需要加法运算，且大部分配置不设置 token 上限（`None`）
+3. **Idle progress timeout** 第三——默认 300 秒无任何 reporter 进展，说明 loop 可能卡死
+4. **Activity timeout** 第四——`max_timeout` 不是无条件墙钟 kill；只在总时长超限且最近无进展时触发
+5. **Token 预算**最后——需要加法运算，且大部分配置不设置 token 上限（`None`）
 
 每种停止原因携带不同的上下文数据（`BudgetStop` 枚举，`crates/octos-agent/src/agent/budget.rs:11-17`）：
 
@@ -136,15 +153,16 @@ pub(super) enum BudgetStop {
     Shutdown,
     MaxIterations,
     MaxTokens { used: u32, limit: u32 },     // 包含已用和上限
-    WallClockTimeout { limit: Duration },     // 包含配置的超时值
+    ActivityTimeout { limit: Duration },      // 总时长超限且无近期活动
+    IdleProgressTimeout { limit: Duration },  // 默认 300s 无进展
 }
 ```
 
-这些上下文数据被传递给 `report_budget_stop()` 方法（`crates/octos-agent/src/agent/budget.rs:67-101`），生成对应的进度事件通知用户——"Reached max iterations" 或 "Token budget exceeded (1000 of 500)" 等具体信息。
+这些上下文数据被传递给 `report_budget_stop()` 方法（`crates/octos-agent/src/agent/budget.rs:82-123`），生成对应的进度事件通知用户——"Reached max iterations"、"Token budget exceeded (1000 of 500)"、"Activity timeout" 等具体信息。`ActivityTrackingReporter` 会在每个 progress event 时刷新 `last_activity_at`（`crates/octos-agent/src/agent/activity.rs:60-82`），所以长任务只要持续产出进展，不会因为单纯墙钟增长被误杀。
 
 ### 5.2.4 消息修复管线
 
-在每次 LLM 调用前，消息历史需要经过 7 道修复（`crates/octos-agent/src/agent/loop_runner.rs:137-144`）：
+在每次 LLM 调用前，消息历史需要经过一条集中在 `prepare_conversation_messages()` 的准备管线（`crates/octos-agent/src/agent/loop_compaction.rs:17-53`），并把每类变更记录到 `LoopRepairReason`（`crates/octos-agent/src/agent/turn_state.rs:47-56`）：
 
 1. **`trim_to_context_window()`**：截断过长的历史消息以适应模型的上下文窗口
 2. **`normalize_system_messages()`**：合并多个系统消息，确保系统提示的正确位置
@@ -152,11 +170,11 @@ pub(super) enum BudgetStop {
 4. **`repair_tool_pairs()`**：确保每个工具调用都有对应的工具结果
 5. **`synthesize_missing_tool_results()`**：为缺失的工具结果生成占位响应（如 `"[result unavailable]"`）
 6. **`truncate_old_tool_results()`**：截断过早的工具结果以节省上下文空间
-7. **`normalize_tool_call_ids()`**：去重和清理工具调用 ID
+7. **`normalize_tool_call_ids()`**：统一跨 Provider 的 tool_call_id 前缀与字符集合
 
 为什么需要这么多修复？原因有三：
 
-**上下文压缩的副作用。** 当对话历史经过 compaction（详见第 8 章），工具调用和工具结果的配对关系可能被破坏——一条工具调用消息的参数被压缩了，但对应的结果消息还在。`repair_tool_pairs()` 和 `synthesize_missing_tool_results()` 修复这类孤立消息。
+**上下文压缩和并发写入的副作用。** 当对话历史经过 compaction（详见第 8 章）或 speculative / overflow 分支并发写入 session 时，工具调用和工具结果的配对关系可能被打散。`repair_message_order()` 会从整个消息列表收集匹配 tool result 并放回 assistant 后面，`repair_tool_pairs()` 和 `synthesize_missing_tool_results()` 则处理孤立或缺失结果。
 
 **Provider 格式差异。** Anthropic 要求 tool result 紧跟在包含 tool_call 的 assistant 消息之后，不能插入其他消息。OpenAI 则允许 tool result 与 tool_call 之间有间隔。`repair_message_order()` 根据当前 Provider 的要求重排消息。
 
@@ -164,11 +182,11 @@ pub(super) enum BudgetStop {
 
 ### 5.2.5 工具数量警告
 
-在第一次迭代中，如果注册的工具数超过 25 个（`crates/octos-agent/src/agent/loop_runner.rs:146-152`），系统会打印警告。这是因为大多数 LLM 在工具列表过长时表现下降——可能出现"空响应"或选择困难。建议通过 `always: false` 策略或 deny 列表减少活跃工具数。
+在第一次迭代中，如果注册的工具数超过 25 个（`crates/octos-agent/src/agent/loop_runner.rs:735-740`），系统会打印警告。这是因为大多数 LLM 在工具列表过长时表现下降——可能出现"空响应"或选择困难。建议通过 `always: false` 策略或 `tool_policy` deny 列表减少活跃工具数。
 
 ### 5.2.6 LLM 调用与空响应重试
 
-LLM 调用（`crates/octos-agent/src/agent/loop_runner.rs:160-183`）经过 hooks 系统，并包含智能重试：
+LLM 调用（`crates/octos-agent/src/agent/loop_runner.rs:754-814`）经过 hooks 系统，并包含智能重试：
 
 ```rust
 let response = match self.call_llm_with_hooks(&messages, &tools, &config).await {
@@ -247,9 +265,9 @@ flowchart TD
     SS --> Return1
     TU --> LD["循环检测"]
     LD -->|"未检测到"| ToolExec["并行执行工具<br/>join_all"]
-    LD -->|"检测到循环"| Warn["注入警告消息<br/>继续执行"]
+    LD -->|"检测到循环"| Warn["返回恢复内容或终止警告<br/>不执行本批工具"]
     ToolExec --> Continue["继续循环"]
-    Warn --> Continue
+    Warn --> ReturnLoop["退出当前 turn"]
     MT --> Return2["退出循环<br/>返回部分响应"]
     CF --> Return3["退出循环<br/>返回安全提示"]
 ```
@@ -258,24 +276,25 @@ flowchart TD
 
 ### 5.3.1 EndTurn / StopSequence
 
-模型自然结束（`crates/octos-agent/src/agent/loop_runner.rs:221-231`）。这是最常见的退出路径——LLM 认为任务已完成，返回最终文本。
+模型自然结束（`crates/octos-agent/src/agent/loop_runner.rs:849-865`）。这是最常见的退出路径——LLM 认为任务已完成，返回最终文本。
 
 ### 5.3.2 ToolUse — 工具执行
 
-这是 Agent Loop 的核心路径（`crates/octos-agent/src/agent/loop_runner.rs:233-256`）。当 LLM 返回工具调用请求时：
+这是 Agent Loop 的核心路径（`crates/octos-agent/src/agent/loop_runner.rs:866-1013`）。当 LLM 返回工具调用请求时：
 
 1. **循环检测**：检查工具调用模式是否重复（见 5.4 节）
-2. **并行执行**：使用 `futures::future::join_all` 并行执行所有工具调用
+2. **并行执行**：交给 `handle_tool_use()` 统一执行、记录 files、token、structured metadata
 3. **结果注入**：将工具结果作为 Tool 角色的消息添加到历史中
-4. **继续循环**：回到迭代开始
+4. **spawn_only fast return**：如果本轮启动的是后台任务，当前 turn 返回“后台工作已启动”
+5. **继续循环**：普通工具结果进入消息历史后，回到迭代开始
 
 ### 5.3.3 MaxTokens
 
-LLM 的输出达到了 `max_output_tokens` 限制（`crates/octos-agent/src/agent/loop_runner.rs:258-268`）。这通常意味着 LLM 的回答被截断了。循环退出，返回截断的内容。
+LLM 的输出达到了 `max_output_tokens` 限制（`crates/octos-agent/src/agent/loop_runner.rs:1014-1029`）。这通常意味着 LLM 的回答被截断了。循环退出，返回截断的内容。
 
 ### 5.3.4 ContentFiltered
 
-LLM 的安全过滤器拦截了输出（`crates/octos-agent/src/agent/loop_runner.rs:270-288`）。这可能因为用户请求涉及敏感内容，或 LLM 的输出触发了 Provider 的内容策略。循环退出，返回安全提示消息。
+LLM 的安全过滤器拦截了输出（`crates/octos-agent/src/agent/loop_runner.rs:1030-1051`）。这可能因为用户请求涉及敏感内容，或 LLM 的输出触发了 Provider 的内容策略。循环退出，返回安全提示消息。
 
 ---
 
@@ -306,16 +325,16 @@ pub struct LoopDetector {
 
 ### 5.4.3 检测后的处理
 
-检测到循环后（`crates/octos-agent/src/agent/loop_runner.rs:235-247`），系统不会终止循环，而是注入一条系统警告消息：
+检测到循环后（`crates/octos-agent/src/agent/loop_runner.rs:866-920`），当前 `process_message` 不会继续执行同一批工具。它先尝试 `dispatch_shell_retry_recovery()`：如果这是反复 shell 尝试导致的 spiral，运行时会通过 `LoopRetryState` 返回最近可用的 shell 输出；否则返回一个去重后的 terminal warning：
 
 ```
 ⚠️ Loop detected: you appear to be repeating the same tool calls.
 Please try a different approach.
 ```
 
-这个消息被 LLM 在下一次迭代中看到，通常足以让模型改变策略。如果模型继续重复，50 次迭代上限会最终终止循环。
+这个消息是当前 turn 的返回内容，而不是写入消息历史后继续执行。`loop_detected_recently` 会保证同一 burst 里不会反复发出相同 warning；如果再次触发，会升级成 terminal error（`crates/octos-agent/src/agent/mod.rs:168-173`）。
 
-"提示而非强制"的设计是务实的——某些场景下的重复是合理的（比如轮询一个尚未完成的后台任务），强制终止会导致误杀。
+这个改变比旧版“注入警告后继续”更保守：检测到重复工具模式时先停住本轮，避免继续消耗工具调用和 token；真正合理的轮询应通过后台任务、spawn_only 或显式状态查询建模，而不是让主 loop 无界重复。
 
 ---
 
@@ -323,14 +342,17 @@ Please try a different approach.
 
 ### 5.5.1 累积追踪
 
-每次 LLM 调用后，token 使用量被累积到 `total_usage`（`crates/octos-agent/src/agent/loop_runner.rs:211-212`）：
+每次 LLM 调用后，token 使用量通过 `LoopTurnState::record_usage()` 累积到 `total_usage`（`crates/octos-agent/src/agent/turn_state.rs:103-120`，调用点见 `loop_runner.rs:843-847`）：
 
 ```rust
-total_usage.input_tokens += response.usage.input_tokens;
-total_usage.output_tokens += response.usage.output_tokens;
+turn.record_usage(
+    response.usage.input_tokens,
+    response.usage.output_tokens,
+    tracker,
+);
 ```
 
-工具执行产生的 token（如果工具内部调用了子 Agent 或 LLM）也被累加（`crates/octos-agent/src/agent/loop_runner.rs:550-554`）。
+工具执行产生的 token（如果工具内部调用了子 Agent 或 LLM）也会先由 `execute_tools()` 聚合，再在 `handle_tool_use()` 中调用同一个 `turn.record_usage()` 累加（`crates/octos-agent/src/agent/execution.rs:1328-1348`; `crates/octos-agent/src/agent/loop_runner.rs:1428-1469`）。
 
 ### 5.5.2 实时上报
 
@@ -369,69 +391,88 @@ TTFT 的自适应设计考虑到了一个现实问题：输入越长（比如包
 将主循环的关键路径提炼为约 200 行（来自 `loop_runner.rs`），带中文注释：
 
 ```rust
-// === 主循环入口 ===
+// === process_message_inner 的关键路径（简化版）===
 loop {
-    // 1. 预算检查——超出任何限制立即返回
-    if let Some(stop) = self.check_budget(iteration, start, &total_usage) {
-        return self.build_budget_response(stop, &messages);
+    // 1. 预算检查：iteration / token / activity / idle / shutdown
+    if let Some(stop) = turn.check_budget(self, activity.as_ref()) {
+        if !self.try_budget_grace_call(&stop, &mut retry_state, turn.iteration()) {
+            turn.record_budget_stop(&stop);
+            return Ok(ConversationResponse { content: stop.message(), /* ... */ });
+        }
     }
 
-    iteration += 1;
-    self.reporter.report_thinking();
+    let iteration = turn.advance_iteration();
+    self.beat_heartbeat(iteration)?;
+    self.reporter().report(ProgressEvent::Thinking { iteration });
 
-    // 2. 工具 LRU 管理——淘汰不活跃的工具
+    // 2. 工具 LRU 与三层 compaction
     self.tools.tick();
+    self.tools.auto_evict();
+    if iteration == 1 {
+        self.maybe_run_preflight_compaction(&mut messages);
+    }
+    let protected_ids = collect_protected_tool_call_ids(&messages);
+    self.run_tier1_compaction(&mut messages, &protected_ids);
 
-    // 3. 消息修复——确保格式符合 Provider 要求
-    normalize_system_messages(&mut messages);
-    repair_message_order(&mut messages);
-    repair_tool_pairs(&mut messages);
-    synthesize_missing_tool_results(&mut messages);
-    truncate_old_tool_results(&mut messages);
-    normalize_tool_call_ids(&mut messages);
+    // 3. 消息准备：trim + system normalize + tool pair/order repair + id normalize
+    prepare_conversation_messages(self, &mut messages, &mut turn);
+    self.maybe_run_turn_compaction(&mut messages, iteration);
 
-    // 4. 调用 LLM（经过 hooks 管线）
-    let response = self.call_llm_with_hooks(&messages, &tools, &config).await?;
+    // 4. 调用 LLM。Anthropic 可带 tier-2 context_management payload。
+    let call_config = with_tier2_context_management(&config, self);
+    let (mut response, streamed) = match self
+        .call_llm_with_hooks(&messages, &tools_spec, &call_config, iteration, &total_usage, &mut turn)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => match self.handle_loop_error_with_dispatch(&e, &mut retry_state, iteration, &mut messages) {
+            LoopErrorAction::Retry => continue,
+            LoopErrorAction::Bail => return Err(e),
+        },
+    };
+    Self::normalize_inline_invokes(&mut response);
 
-    // 5. 累积 token 使用量
-    total_usage.input_tokens += response.usage.input_tokens;
-    total_usage.output_tokens += response.usage.output_tokens;
+    // 5. 累积 token 使用量，并同步 TokenTracker。
+    turn.record_usage(response.usage.input_tokens, response.usage.output_tokens, tracker);
 
     // 6. stop_reason 决策
     match response.stop_reason {
         StopReason::EndTurn | StopReason::StopSequence => {
-            // 任务完成，退出循环
-            messages.push(Message::assistant(&response.content));
+            self.emit_cost_update(turn.total_usage(), &response.usage);
             return Ok(ConversationResponse { /* ... */ });
         }
         StopReason::ToolUse => {
-            // 将 LLM 的响应加入历史
-            messages.push(assistant_message_with_tool_calls);
-
-            // 循环检测
+            // 检测到重复工具模式时，不再继续执行这一批工具。
             for tc in &response.tool_calls {
                 if let Some(warning) = loop_detector.record(&tc.name, &tc.arguments) {
-                    messages.push(Message::system(warning));
+                    if let Some(recovered) =
+                        self.dispatch_shell_retry_recovery(&messages, &mut retry_state, iteration)
+                    {
+                        return Ok(ConversationResponse { content: recovered, /* ... */ });
+                    }
+                    return Ok(ConversationResponse {
+                        content: self.dedup_loop_warning(warning)?,
+                        /* ... */
+                    });
                 }
             }
 
-            // 并行执行所有工具
-            let tool_results = futures::future::join_all(
-                response.tool_calls.iter().map(|tc| self.execute_tool(tc))
-            ).await;
-
-            // 将工具结果加入消息历史
-            for result in tool_results {
-                messages.push(Message::tool(result));
+            if let Err(e) = self.handle_tool_use(&response, &mut messages, /* ... */).await {
+                match self.handle_loop_error_with_dispatch(&e, &mut retry_state, iteration, &mut messages) {
+                    LoopErrorAction::Retry => continue,
+                    LoopErrorAction::Bail => return Err(e),
+                }
             }
-            // 继续循环
+
+            if self.tools.spawn_only_was_invoked() {
+                return Ok(ConversationResponse { content: "Background work started...".into(), /* ... */ });
+            }
         }
         StopReason::MaxTokens => {
-            messages.push(Message::assistant(&response.content));
             return Ok(ConversationResponse { /* ... */ });
         }
         StopReason::ContentFiltered => {
-            return Ok(ConversationResponse::safety_message());
+            return Ok(ConversationResponse { content: safety_message(response), /* ... */ });
         }
     }
 }
@@ -441,9 +482,9 @@ loop {
 
 ---
 
-> ### 工程决策侧栏：为什么主循环不是 Actor Model
+> ### 工程决策侧栏：为什么 Agent Loop 本身不是 Actor Model
 >
-> 很多并发系统（如 Akka、Erlang/OTP）使用 Actor Model——每个 Agent 是一个 Actor，通过消息传递通信。octos 选择了更简单的"异步循环 + Mutex 保护"模型。
+> 很多并发系统（如 Akka、Erlang/OTP）使用 Actor Model——每个 Agent 是一个 Actor，通过消息传递通信。octos 的会话层确实由 `SessionActor` 串行化同一 session 的输入，但 Agent Loop 本身选择了更直接的“typed async loop + 显式 runtime state”模型。
 >
 > **方案一：Actor Model**
 >
@@ -457,18 +498,18 @@ loop {
 > - 工具执行需要请求-响应语义，Actor 的异步消息传递会增加复杂度
 > - Agent 的状态本质上是线性的（消息历史 + 迭代计数），不需要 Actor 的并发状态管理
 >
-> **方案二：异步循环 + Mutex（octos 的选择）**
+> **方案二：typed async loop + session actor 边界（octos 的选择）**
 >
 > 优势：
 > - 直观的顺序逻辑——循环的每一步自然对应 Agent 的行为阶段
 > - Tokio 的异步运行时已经提供了并发能力（`join_all` 并行执行工具）
-> - 会话级 Mutex 确保同一用户的消息按序处理，不需要复杂的消息队列
+> - 会话层负责串行化同一 session 的消息，Agent Loop 内部专注于 turn-local 状态机
 >
 > 劣势：
 > - 跨 Agent 协调需要显式的 channel 通信
 > - 没有内置的 supervision tree
 >
-> **octos 的理由：** Agent Loop 的核心是顺序的——接收→思考→行动→观察→思考→...。在这个链条中，并发只出现在"行动"阶段（多个工具并行执行）。用一个 `loop` + `join_all` 就能优雅地表达这个逻辑，不需要 Actor 的抽象开销。
+> **octos 的理由：** Agent Loop 的核心是顺序的——接收→思考→行动→观察→思考→...。在这个链条中，并发只出现在"行动"阶段（多个工具并行执行、后台 spawn_only 任务独立交付）。把主路径保持为 `loop` + typed state machine，可以让预算、compaction、retry bucket、harness event 这些控制面保持可审计，而不是被 Actor 消息协议分散。
 
 ---
 
@@ -511,13 +552,13 @@ stateDiagram-v2
 
 Agent Loop 是 octos 的灵魂——一个精心编排的 while 循环：
 
-1. **预算检查**：四道门禁（shutdown → iterations → timeout → tokens），确保 Agent 不会无限运行。50 次迭代上限是默认安全阀。
+1. **预算检查**：五道门禁（shutdown → iterations → idle progress timeout → activity timeout → tokens），确保 Agent 不会无限运行，也不会误杀仍在持续上报进展的长任务。50 次迭代上限是默认安全阀。
 
-2. **消息修复**：6 道修复管线在每次 LLM 调用前规范化消息历史，处理上下文压缩的副作用和 Provider 间的格式差异。
+2. **消息修复**：7 类 repair reason 在每次 LLM 调用前规范化消息历史，处理上下文压缩、并发写入副作用和 Provider 间的格式差异。
 
 3. **stop_reason 决策**：五种分支中只有 ToolUse 触发循环继续。EndTurn 是正常退出，MaxTokens 是截断退出，ContentFiltered 是安全退出。
 
-4. **循环检测**：哈希签名 + 模式匹配（长度 1/2/3，重复 3 次），检测到后注入警告而非强制终止。
+4. **循环检测**：哈希签名 + 模式匹配（长度 1/2/3，重复 3 次），检测到后停止当前工具批次，优先返回 shell 恢复内容，否则返回去重后的 terminal warning。
 
 5. **Token 追踪**：原子计数器实时更新，支持 CLI/Web UI 的成本显示。
 
@@ -525,7 +566,7 @@ Agent Loop 是 octos 的灵魂——一个精心编排的 while 循环：
 
 7. **typed recovery**：`HarnessError`、`LoopRetryState` 和 `LoopDecision` 让错误恢复成为有界状态机；`CompactAndRetry` 已经接入主循环，provider lane rotation 则仍由外层 provider chain 承担。
 
-下一章将深入工具系统——Agent Loop 中"行动"阶段的核心：14 个内置工具如何注册、调用和安全管控。
+下一章将深入工具系统——Agent Loop 中"行动"阶段的核心：内置工具、插件工具和 spawn_only 后台任务如何注册、调用和安全管控。
 
 ---
 
@@ -542,11 +583,11 @@ Agent Loop 是 octos 的灵魂——一个精心编排的 while 循环：
 
 2. **循环检测的局限**：当前的哈希签名方法只检测精确重复。如果 Agent 每次传递的参数略有不同（如文件名多一个空格），检测就会失效。你会如何改进？
 
-3. **消息修复的必要性**：6 道消息修复管线处理了大量边界情况。如果 octos 只支持一个 Provider（如只支持 Anthropic），哪些修复可以省略？
+3. **消息修复的必要性**：7 类 repair reason 处理了大量边界情况。如果 octos 只支持一个 Provider（如只支持 Anthropic），哪些修复可以省略？
 
 4. **Actor Model 的场景**：本章的工程决策侧栏选择了简单循环而非 Actor Model。如果 octos 需要支持多个 Agent 协作（如一个规划 Agent 分配任务给多个执行 Agent），设计会如何改变？
 
 ---
 
 > **版本演化说明**
-> 本章分析基于 octos v0.1.0，核心循环位于 `crates/octos-agent/src/agent/loop_runner.rs`。截至本书写作时，主循环的迭代结构和 stop_reason 决策逻辑无重大变化。消息修复管线可能随新 Provider 的加入而扩展。
+> 本章按当前 `../octos/crates/octos-agent/src/agent/` 源码撰写。后续审查应重点核对 `loop_runner.rs`、`loop_state.rs`、`loop_compaction.rs`、`budget.rs`、`streaming.rs` 与 `harness_errors.rs` 的协同，因为 Agent Loop 的主要变化已经集中在 typed recovery、tiered compaction、idle progress timeout 和后台任务交付边界。
