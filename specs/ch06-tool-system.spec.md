@@ -28,6 +28,8 @@ estimate: 1.5d
 
 ### 允许修改
 - octos-book/chapters/ch06-*.md
+- octos-book/book/src/part2/ch06.md
+- octos-book/book-en/src/part2/ch06.md
 - octos-book/specs/ch06-*.spec.md
 - octos-book/assets/ch06-*
 
@@ -49,12 +51,12 @@ estimate: 1.5d
   当 阅读 Tool trait 小节
   那么 展示了当前 `Tool` trait 的真实方法集合
   并且 解释了 `ToolResult` 的结构
-  并且 说明了 `tags()` 与 `as_any()` 的职责
+  并且 说明了 `execute_with_context()`、`tags()`、`as_any()` 与 `concurrency_class()` 的职责
 
 场景: ToolRegistry 的分层注册
   测试: review_ch06_registry_layers
   当 阅读注册机制小节
-  那么 解释了 `with_builtins_and_sandbox()` 的 11 个基础工具加 feature-gated 扩展
+  那么 解释了 `with_builtins_and_sandbox()` 的 15 个基础工具加 feature-gated 扩展
   并且 区分了配置注入、chat 追加、gateway 追加、per-session 追加
   并且 明确说明 `tools/mod.rs` 导出列表不等于默认注册表
 
@@ -70,6 +72,7 @@ estimate: 1.5d
   当 阅读 `spawn_only` 相关说明
   那么 明确说明它不属于 deferred / LRU 延迟池
   并且 解释了主会话里的自动后台化
+  并且 说明当前优先向 LLM 返回 `task_handle` envelope 并通过 `read_task_output` 读取后台输出
   并且 说明了 subagent 中 `clear_spawn_only()` 后按普通工具执行
 
 场景: ToolPolicy 三维过滤
@@ -77,8 +80,14 @@ estimate: 1.5d
   当 阅读 ToolPolicy 小节
   那么 解释了 deny-wins 的评估逻辑
   并且 展示了通配符匹配（`web_*`）的实现方向
-  并且 覆盖 `group:fs/runtime/web/search/sessions/memory/research/admin/media`
+  并且 覆盖 `group:fs/runtime/web/search/sessions/memory/research/admin/media/delegated`
   并且 说明了 `require_tags` 与空标签工具的语义
+
+场景: 并发调度语义
+  测试: review_ch06_concurrency_class
+  当 阅读工具执行小节
+  那么 解释了 `ConcurrencyClass::Safe` 与 `ConcurrencyClass::Exclusive`
+  并且 说明 safe batch 使用 `join_all` 并发执行，包含 exclusive 时走串行 admission
 
 场景: Provider 级策略配置
   测试: review_ch06_provider_policy
