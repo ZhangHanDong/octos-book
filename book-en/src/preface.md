@@ -4,7 +4,7 @@
 
 AI Agents are moving from labs to production. But when you open most Agent frameworks' source code, you see Python scripts, string-concatenated prompts, and `try: ... except: pass` error handling. This works for prototypes, but when your Agent needs to run 24/7 in production, serving multiple tenants while executing shell commands and file operations, you need more than a framework — you need operating-system-level infrastructure.
 
-octos is an AI Agent operating system built in Rust. 130K lines of code, 9 core crates, zero `unsafe` code. It's not "LangChain in Rust" — it was designed from line one for multi-tenancy, security isolation, and production reliability.
+octos is an AI Agent operating system built in Rust. The current main branch has about 260K lines of Rust source, 11 octos-* core crates, and workspace-level `deny(unsafe_code)`. It's not "LangChain in Rust" — it was designed from line one for multi-tenancy, security isolation, and production reliability.
 
 This book is not an octos user manual. It's an **engineering decision analysis** — each chapter dives into a subsystem's source code, showing "why this approach", "what alternatives were considered", and "what price was paid."
 

@@ -1,6 +1,6 @@
 # 第 2 章：octos-core：用类型系统定义领域语言
 
-> **定位**：本章深入 octos 最底层的 crate——octos-core（当前约 9.8k 行，主要增长来自 UI Protocol wire 类型），展示如何用 Rust 类型系统构建 AI Agent 平台的领域语言。前置依赖：第 1 章。适用场景：想理解 octos 类型基础的所有读者，尤其是希望通过实战项目学习 Rust 枚举和错误处理设计的读者（读者 A），以及想了解"零依赖 core crate"设计哲学的资深开发者（读者 B）。
+> **定位**：本章深入 octos 最底层的 crate——octos-core（当前约 8.8k 行 Rust 源文件，主要增长来自 UI Protocol wire 类型），展示如何用 Rust 类型系统构建 AI Agent 平台的领域语言。前置依赖：第 1 章。适用场景：想理解 octos 类型基础的所有读者，尤其是希望通过实战项目学习 Rust 枚举和错误处理设计的读者（读者 A），以及想了解"零依赖 core crate"设计哲学的资深开发者（读者 B）。
 
 如果把 octos 比作一座城市，octos-core 就是它的语言——不是建筑、不是道路，而是居民用来交流的词汇和语法。`Task`、`Message`、`MessageRole`、`Error`、UI Protocol wire 类型——这些类型定义了系统中所有组件如何描述自己的状态和意图。octos 的上层 crate 都依赖这些类型，但 octos-core 本身不依赖 workspace 中的任何其他 crate。
 
@@ -575,7 +575,7 @@ pub enum AgentMessage {
 >
 > 优势：
 > - 极少变更，提供稳定的类型基础
-> - 编译边界清晰（octos-core 当前约 9.8k 行，其中大头是 UI Protocol wire 类型）
+> - 编译边界清晰（octos-core 当前约 8.8k 行 Rust 源文件，其中大头是 UI Protocol wire 类型）
 > - 依赖图清晰：所有 crate 依赖 core 的类型，但 core 不依赖任何人
 >
 > 劣势：
@@ -592,7 +592,7 @@ pub enum AgentMessage {
 
 ## 2.9 本章回顾
 
-octos-core 用约 9.8k 行代码定义了整个系统的领域语言：
+octos-core 用约 8.8k 行 Rust 源文件定义了整个系统的领域语言：
 
 1. **Task 状态机**：用 Rust 枚举编码合法状态和转换，在类型层面消除非法状态组合。UUID v7 提供时间排序，五维 TokenUsage 支持精细的成本追踪。
 
